@@ -12,7 +12,6 @@ const MAX_DISPLAY = 3
 export default function Home({ posts }) {
   return (
     <>
-      {/*添加了Hero*/}
       <div className="space-y-1 pb-10 text-center dark:border-gray-700">
         <div className="w-full">
           <Bleed>
