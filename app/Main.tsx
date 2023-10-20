@@ -3,9 +3,9 @@ import Tag from '@/components/Tag'
 import siteMetadata from '@/data/siteMetadata'
 import { formatDate } from 'pliny/utils/formatDate'
 import NewsletterForm from 'pliny/ui/NewsletterForm'
-import Bleed from "pliny/ui/Bleed";
-import Image from "@/components/Image";
-import PageTitle from "@/components/PageTitle";
+import Bleed from 'pliny/ui/Bleed'
+import Image from '@/components/Image'
+import PageTitle from '@/components/PageTitle'
 
 const MAX_DISPLAY = 3
 
@@ -16,7 +16,12 @@ export default function Home({ posts }) {
         <div className="w-full">
           <Bleed>
             <div className="aspect-[2/1] w-full relative">
-              <Image src={siteMetadata.hero} alt={siteMetadata.hero} fill className="object-cover"  />
+              <Image
+                src={siteMetadata.hero}
+                alt={siteMetadata.hero}
+                fill
+                className="object-cover"
+              />
             </div>
           </Bleed>
         </div>
