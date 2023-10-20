@@ -6,7 +6,7 @@ const siteMetadata = {
   description: '分享个人见解，记录学习历程',
   language: 'zh_CN',
   theme: 'system', // system, dark or light
-  siteUrl: 'https://yinli-site.vercel.app',
+  siteUrl: 'https://yinli-site.netlify.app',
   siteLogo: '/static/images/site/logo.png',
   hero: '/static/images/site/hero.jpg',
   // 添加view on github时使用
