@@ -1,0 +1,771 @@
+---
+title: 'Redis：作为缓存的基本用法和其他应用场景'
+date: 2023-02-10T18:16:25Z
+tags: ['redis', '数据库']
+summary: '本文针对Redis基于内存的特性，详细介绍了Redis作为缓存的用法，还有Redis其他的的应用场景。'
+layout: PostLayout
+bibliography: references-data.bib
+---
+
+## Redis的特性
+
+Redis是基于内存来操作的，相较于基于磁盘进行存储的关系型数据库来说，读写速度会块很多，性能自然会好一些。
+
+基于这条特性，Redis最常作为缓存。
+
+Redis还可以作为消息队列，或者实现分布式锁，除此之外还有其他应用场景。
+
+## Session的问题
+
+但是，服务端本身有基于内存的Session，可以在服务端内存中存储会话信息，读写速度也很快，为什么要用Redis呢？
+
+单服务器web应用中，session信息只需存在该服务器中，此时Session是合适的。
+
+但是近几年随着分布式系统的流行，单系统已经不能满足日益增长的用户的需求，集群方式部署服务器已在很多公司运用起来。
+
+当高并发量的请求到达服务端的时候通过负载均衡的方式分发到集群中的某个服务器，这样就有可能导致同一个用户的多次请求被分发到集群的不同服务器上，就会出现取不到session数据的情况，于是session的共享就成了一个问题。
+
+解决方法：将原本的信息存储在Redis中即可。
+
+## 缓存 
+
+### 什么是缓存
+
+缓存(Cache)就是数据交换的缓冲区，俗称的缓存就是缓冲区内的数据，一般从数据库中获取，存储于本地
+
+在实际开发中，使用缓存可以阻止过高的数据量猛冲系统，导致其操作线程无法及时处理信息而瘫痪
+
+|优点|缺点|
+|--|--|
+|降低后端负载|数据一致性成本|
+|提高读写效率，降低响应时间|代码/运维维护成本|
+
+### 添加缓存
+
+在查询信息时，是直接从数据库中去进行查询的，可以在客户端与数据库之间加上一个Redis缓存，先从Redis中查询，如果没有查到，再去MySQL中查询，同时查询完毕之后，将查询到的数据存入Redis，这样当下一个用户来进行查询的时候，就可以直接从Redis中获取到数据。
+
+示意图
+
+![redis-cache-demo](/static/images/blog/redis-usages/redis-cache-demo.png)
+
+编码实现
+
+```java
+public Shop queryShopById(Long id) {
+  Shop shop = (Shop)stringRedisTemplate.opsForValue().get(id);
+  if (shop != null) {
+    return Shop;
+  }
+  shop = this.getByid(id);
+  Optional.ofNullable(factory).orElseThrow(() -> new BussinessException(ErrorCode.NOT_FOUND,"not found"));
+  stringRedisTemplate.opsForValue().set(id, shop);
+  return shop;
+}
+```
+
+### 缓存更新策略
+
+因为内存数据宝贵，当缓存中数据过多时，Redis会对部分数据进行更新，或者把它淘汰
+
+![cache-update-strategy](/static/images/blog/redis-usages/cache-update-strategy.png)
+
+**使用场景**
+
+- 低一致性需求：使用内存淘汰机制
+- 高一致性需求：主动更新，并以超时剔除作为兜底方案
+
+### 数据库与缓存不一致
+
+[数据不一致详解](https://mp.weixin.qq.com/s?__biz=MzIyOTYxNDI5OA==&mid=2247487312&idx=1&sn=fa19566f5729d6598155b5c676eee62d&chksm=e8beb8e5dfc931f3e35655da9da0b61c79f2843101c130cf38996446975014f958a6481aacf1&scene=178&cur_album_id=1699766580538032128#rd)
+
+由于我们的缓存数据源来自数据库，而数据库的数据是会发生变化的，因此，如果当数据库中数据发生变化，而缓存却没有同步，此时就会有一致性问题
+
+一般情况下有以下三种方案
+
+1. Cache Aside Pattern 人工编码方式：缓存调用者在更新完数据库之后再去更新缓存，也称之为**双写方案**
+2. Read/Write Through Pattern：缓存与数据库整合为一个服务，由服务来维护一致性。调用者调用该服务，无需关心缓存一致性问题。但是维护这样一个服务很复杂，市面上也不容易找到这样的一个现成的服务，开发成本高
+3. Write Behind Caching Pattern：调用者只操作缓存，其他线程去异步处理数据库，最终实现一致性。但是维护这样的一个异步的任务很复杂，需要实时监控缓存中的数据更新，其他线程去异步更新数据库也可能不太及时，而且缓存服务器如果宕机，那么缓存的数据也就丢失了
+
+一般情况下我们采用第一种方法
+
+**对比删除缓存与更新缓存**
+
+- 更新缓存：每次更新数据库都需要更新缓存，无效写操作较多
+- **删除缓存**：更新数据库时让缓存失效，再次查询时更新缓存
+
+**如何保证缓存与数据库的操作同时成功/同时失败**
+
+- 单体系统：将缓存与数据库操作放在同一个**事务**
+- 分布式系统：利用TCC等分布式事务方案
+
+**先操作缓存还是先操作数据库**
+
+- 删除缓存的操作很快，但是更新数据库的操作相对较慢，如果此时有一个线程2刚好进来查询缓存，由于我们刚刚才删除缓存，所以线程2需要查询数据库，并写入缓存，但是我们更新数据库的操作还未完成，所以线程2查询到的数据是脏数据，出现线程安全问题
+- 线程1在查询缓存的时候，缓存TTL刚好失效，需要查询数据库并写入缓存，这个操作耗时相对较短（相比较于上面一个来说），但是就在这么短的时间内，线程2进来了，更新数据库，删除缓存，但是线程1虽然查询完了数据（更新前的旧数据），但是还没来得及写入缓存，所以线程2的更新数据库与删除缓存，并没有影响到线程1将旧数据写入缓存，造成线程安全问题
+
+虽然这二者都存在线程安全问题，但是相对来说，后者出现线程安全问题的概率相对较低，所以我们最终采用**先操作数据库，再删除缓存**的方案
+
+```java
+// 存入redis中时，设置TTL
+stringRedisTemplate.opsForValue().set(id, shop, TTL, TimeUnit.MINUTES);
+```
+
+```java
+public void update(Shop shop) {
+  //首先先判一下空
+  if (shop.getId() == null){
+    throw new BussinessException(ErrorCode.NOT_FOUND,"not found");  
+  }
+  //先修改数据库
+  updateById(shop);
+  //再删除缓存
+  stringRedisTemplate.delete(CACHE_SHOP_KEY + shop.getId());
+}
+```
+
+### 缓存穿透
+
+缓存穿透是指客户端请求的数据在缓存中和数据库中都不存在，会频繁的去访问数据库，造成数据库压力或者被黑客恶意攻击
+
+常见解决方案
+
+- **缓存空对象**：当数据库中没有用户请求的数据时，缓存一个空值
+- **布隆过滤**：客户端请求先经过布隆过滤，判断数据是否存在
+
+**布隆过滤器说某个元素存在，小概率会误判。布隆过滤器说某个元素不在，那么这个元素一定不在。**
+
+[布隆过滤器详解](https://javaguide.cn/cs-basics/data-structure/bloom-filter.html)
+
+||缓存空对象|布隆过滤|
+|--|--|--|
+|优点|实现简单，维护方便|内存占用少没有多余的key|
+|缺点|额外的内存消耗，可能造成短期的不一致|实现复杂，可能存在误判|
+
+```java
+// 缓存空对象避免缓存穿透
+public Shop queryShopById(Long id) {
+  Shop shop = (Shop)stringRedisTemplate.opsForValue().get(id);
+  if (shop != null) {
+    return Shop;
+  }
+  //如果查询到的是空字符串，则说明是我们缓存的空数据
+  if (shop.isEmpty()){
+    throw new BussinessException(ErrorCode.NOT_FOUND,"not found"));
+  }
+  shop = this.getByid(id);
+  if (shop == null) {
+    // 缓存空对象
+    stringRedisTemplate.opsForValue().set(id, "", 30, TimeUnit.MINUTES);
+    throw new BussinessException(ErrorCode.NOT_FOUND,"not found"));
+  }
+  stringRedisTemplate.opsForValue().set(id, shop);
+  return shop;
+}
+```
+
+缓存穿透还有一些其他解决方案
+
+- 做好数据的基础格式校验
+- 限流操作
+
+### 缓存雪崩
+
+缓存雪崩是指在同一时间段，大量缓存的key同时失效，或者Redis服务宕机，导致大量请求到达数据库，带来巨大压力
+
+**解决方案**
+
+- 给不同的Key的TTL添加随机值，让其在不同时间段分批失效
+- 利用Redis集群提高服务的可用性
+- 给缓存业务添加降级限流策略
+- 给业务添加多级缓存
+
+### 缓存击穿
+
+缓存击穿也叫热点Key问题，就是一个被高并发访问并且缓存重建业务较复杂的key突然失效了，那么无数请求访问就会在瞬间给数据库带来巨大的冲击
+
+ **例子**：秒杀进行过程中，缓存中的某个秒杀商品的数据突然过期，这就导致瞬时大量对该商品的请求直接落到数据库上，对数据库造成了巨大的压力。
+
+**解决办法**
+
+- 设置热点数据永不过期或者过期时间比较长。
+- 针对热点数据提前预热，将其存入缓存中并设置合理的过期时间，比如秒杀场景下的数据在秒杀结束之前不过期。
+- 请求数据库写数据到缓存之前，先获取互斥锁，保证只有一个请求会落到数据库上，减少数据库的压力。
+
+### 缓存穿透和缓存击穿有什么区别？
+
+缓存穿透中，请求的 key 既不存在于缓存中，也不存在于数据库中。缓存击穿中，请求的 key 对应的是 热点数据 ，该数据存在于数据库中，但不存在于缓存中（通常是因为缓存中的那份数据已经过期）
+
+## 典型高并发问题
+
+### 超卖问题
+
+当遇到高并发场景时，会出现超卖现象
+
+假设现在只剩下一张优惠券，线程1过来查询库存，判断库存数大于0，但还没来得及去扣减库存，此时库线程2也过来查询库存，发现库存数也大于0，那么这两个线程都会进行扣减库存操作，最终相当于是多个线程都进行了扣减库存，那么此时就会出现超卖问题
+
+解决方法：**加锁**
+
+[乐观锁和悲观锁详解](https://javaguide.cn/java/concurrent/optimistic-lock-and-pessimistic-lock.html)
+
+悲观锁：认为线程不安全情况**一定会发生**，因此在操作数据之前先获取锁，确保线程串行执行
+
+- 例如Synchronized、Lock等，都是悲观锁
+- 简单粗暴，但性能一般
+
+乐观锁认为线程安全问题**不一定会发生**，因此不加锁，只是在更新数据的时候再去判断有没有其他线程对数据进行了修改
+
+- 如果没有修改，则认为自己是安全的，自己才可以更新数据
+- 如果已经被其他线程修改，则说明发生了安全问题，此时可以重试或者异常
+- 性能较高，但存在成功率低的问题
+
+乐观锁一般有一个版本号，在每次操作之前确认自己的版本号是否和最开始查询时一致；一致则安全，不一致则不安全
+
+一般是在数据表中加上一个数据版本号 version 字段，表示数据被修改的次数。当数据被修改时，version 值会加一。当线程 A 要更新数据值时，在读取数据的同时也会读取 version 值，在提交更新时，若刚才读取到的 version 值为当前数据库中的 version 值相等时才更新，否则重试更新操作，直到更新成功。
+
+例如，在超卖问题上，库存只减少不增加，我们可以使用库存作为版本号，认为库存不小于0则安全。
+
+### 一人一单
+
+对于需要一人一单的情况，在操作数据库之前判断用户是否有资格购买
+
+```java
+int count = this.lambdaQuery()
+  .eq(Order::getVocherId, voucherId)
+  .eq(Order::getVocherId, userId)
+  .count();
+if (count > 0){
+  // 已经下过订单了
+}
+// 可以下订单
+// 扣减库存
+// 新增订单
+```
+
+**问题**：如果这个用户故意开多线程抢优惠券，这些线程都会查询到还没下过订单，还是可以多次下单的
+
+**解决方法**：给这个方法加锁
+
+```java
+// 在方法上加锁
+@Transactional
+private synchronized void createVoucherOrder(Long voucherId){
+  // 一人一单逻辑
+  // 扣减库存
+  // 新增订单
+}
+```
+
+**问题**：锁的细粒度太大，现在的情况是所有用户都公用这一把锁，串行执行，效率很低。一人一单业务，所以这个锁应该只加在单个用户上，用户标识可以用userId
+
+```java
+@Transactional
+private void createVoucherOrder(Long voucherId){
+  Long userId = userService.getLoginUser().getId();
+  synchronized (userId.toString().intern()) {
+    // 一人一单逻辑
+    // 扣减库存
+    // 新增订单
+  }
+}
+```
+
+这里需要尤为注意userId.toString().intern()
+
+由于toString的源码是new String，即使是userId相同，但toString()后synchronized的对象是不同的，所以要使用.intern()
+
+调用 intern 方法时，如果池中已包含与toString相等的String字符串（由equals(Object)去确定），则返回池中的字符串。否则，此String对象将添加到池中，并返回对此String对象的引用
+
+注意：**确保事务的提交和锁的释放在同一时间点进行是保证数据一致性和并发控制的重要步骤。** 也就是说，要在synchronized方法块内写完所有逻辑，确保锁不会在事务未提交时释放。
+
+**事务不会生效的三种场景**
+
+1. @Transactional 加在了非public方法上。此时不会生成代理对象，事务失效
+2. 调用类内用的 @Transactional 方法。此时调用类内部的方法时，不是通过代理对象完成的，而是通过 this 对象实现的，这样就绕过了代理对象，事务失效
+3. 自定义try/catch。当执行的方法中出现异常后，@Transactional 才能感知到，然后再执行事务回滚。而当开发者自行添加了 try/catch 之后，@Transactional 就感知不到异常了，事务失效
+
+### 集群环境并发问题
+
+问题：在集群模式下，我们发送两次请求，header携带同一用户的token，因为nginx负载均衡，可以用同一账号抢两张优惠券
+
+原因：由于部署了多个Tomcat，每个Tomcat都有一个属于自己的jvm。即使tomcat1中userId被锁了，不影响tomcat2中同样的userId拿到锁
+
+解决方法：**分布式锁**，让锁不存在于每个jvm的内部，而是让所有jvm公用外部的一把锁（Redis）
+
+## 分布式锁
+
+### 基本原理
+
+所有线程共用同一把锁，给线程加锁，不让线程进行，让程序串行执行
+
+分布式锁的要求
+
+1. 可见性：**多个线程都能看到相同的结果**
+2. 互斥：互斥是分布式锁的最基本条件，使得程序串行执行
+3. 高可用：程序不已崩溃，时时刻刻都保证较高的可用性
+4. 高性能：由于加锁本身就让性能降低，所以对于分布式锁需要他较高的加锁性能和释放锁性能
+5. 安全性：安全也是程序中必不可少的一环
+
+**常见的分布式锁**
+
+||Mysql|Redis|Zookeeper|
+|--|--|--|--|
+|互斥|自身互斥锁机制|setnx类似命令|阶段的唯一性和有序性|
+|可用|好|好|好|
+|性能|一般|好|一般|
+|安全|断开连接自动释放|锁超时时间，到期释放|断开连接自动释放|
+
+这里我们考虑使用Redis实现分布式锁
+
+```
+// 获取锁并添加超时释放
+SET lock thread01 NX EX 10
+//释放锁
+DEL lock
+```
+
+### 实现
+
+```java
+// 接口
+public interface ILock {
+    /**
+     * 尝试获取锁
+     *
+     * @param timeoutSec 锁的超时时间，过期自动释放
+     * @return true表示获取锁成功，false表示获取锁失败
+     */
+    boolean tryLock(long timeoutSec);
+
+    /**
+     * 释放锁
+     */
+    void unlock();
+}
+```
+
+```java
+// 实现
+public class SimpleRedisLock implements ILock {
+    //锁的前缀
+    private static final String KEY_PREFIX = "lock:";
+    //具体业务名称，将前缀和业务名拼接之后当做Key
+    private String name;
+    //这里不需要注入，因为该对象是我们使用构造函数手动new出来的
+    private StringRedisTemplate stringRedisTemplate;
+
+    public SimpleRedisLock(String name, StringRedisTemplate stringRedisTemplate) {
+        this.name = name;
+        this.stringRedisTemplate = stringRedisTemplate;
+    }
+
+    @Override
+    public boolean tryLock(long timeoutSec) {
+        //获取线程标识
+        long threadId = Thread.currentThread().getId();
+        //获取锁，使用SETNX方法进行加锁，同时设置过期时间，防止死锁
+        Boolean success = stringRedisTemplate.opsForValue().setIfAbsent(KEY_PREFIX + name, threadId + "", timeoutSec, TimeUnit.SECONDS);
+        return Boolean.TRUE.equals(success);
+    }
+
+    @Override
+    public void unlock() {
+        //通过DEL来删除锁
+        stringRedisTemplate.delete(KEY_PREFIX + name);
+    }
+}
+```
+
+### 误删问题
+
+**问题描述**
+
+1. 持有锁的线程1在锁的内部出现了阻塞，导致锁TTL到期，自动释放
+2. 此时线程2也来尝试获取锁
+3. 线程1阻塞结束，继续执行，开始释放锁
+4. 将属于线程2的锁释放
+
+**解决方案**
+
+在每个线程释放锁的时候，都判断一下这个锁是不是自己的，如果不属于自己，则不进行删除操作
+
+获取锁的时存入线程标识（用UUID标识，在一个JVM中，ThreadId一般不会重复，但是集群模式下有多个JVM，多个JVM之间可能会出现ThreadId重复的情况），在释放锁的时候先获取锁的线程标识，判断是否与当前线程标识一致
+
+```java
+private static final String ID_PREFIX = UUID.randomUUID().toString(true) + "-";
+@Override
+public boolean tryLock(long timeoutSec) {
+    // 获取线程标识
+    String threadId = ID_PREFIX + Thread.currentThread().getId();
+    // 获取锁
+    Boolean success = stringRedisTemplate.opsForValue().setIfAbsent(KEY_PREFIX + name, threadId, timeoutSec, TimeUnit.SECONDS);
+    return Boolean.TRUE.equals(success);
+}
+
+@Override
+public void unlock() {
+    // 获取当前线程的标识
+    String threadId = ID_PREFIX + Thread.currentThread().getId();
+    // 获取锁中的标识
+    String id = stringRedisTemplate.opsForValue().get(KEY_PREFIX + name);
+    // 判断标识是否一致
+    if (threadId.equals(id)) {
+        // 释放锁
+        stringRedisTemplate.delete(KEY_PREFIX + name);
+    }
+}
+```
+
+### 极端情况下的误删问题
+
+**问题描述**
+
+1. 线程1获取到锁，业务结束后判断锁标识一致，准备释放锁
+2. 线程1出现阻塞并且锁TTL到期，自动释放
+3. 线程2获取到锁
+4. 线程1阻塞完毕，释放了属于线程2的锁（步骤1时已经判断过锁标识一致）
+
+由于判断锁和释放锁是两个动作，【当判断锁和释放锁之间】产生了阻塞，则会导致误删
+
+**解决**：使判断锁和释放锁具有 原子性
+
+#### lua脚本解决
+
+创建lua脚本
+
+```lua
+-- 这里的 KEYS[1] 就是锁的key，这里的ARGV[1] 就是当前线程标识
+-- 获取锁中的标识，判断是否与当前线程标识一致
+if (redis.call('GET', KEYS[1]) == ARGV[1]) then
+  -- 一致，则删除锁
+  return redis.call('DEL', KEYS[1])
+end
+-- 不一致，则直接返回
+return 0
+```
+
+更改加锁解锁接口
+
+```java
+private static final DefaultRedisScript<Long> UNLOCK_SCRIPT;
+    static {
+        UNLOCK_SCRIPT = new DefaultRedisScript<>();
+        // 注意脚本路径
+        UNLOCK_SCRIPT.setLocation(new ClassPathResource("unlock.lua"));
+        UNLOCK_SCRIPT.setResultType(Long.class);
+    }
+
+public void unlock() {
+    // 调用lua脚本
+    stringRedisTemplate.execute(
+            UNLOCK_SCRIPT,
+            Collections.singletonList(KEY_PREFIX + name),
+            ID_PREFIX + Thread.currentThread().getId());
+}
+// 经过以上代码改造后，我们就能够实现拿锁比锁删锁的原子性动作了
+```
+
+## 点赞和关注功能的实现
+
+判断用户是否给某篇博客点赞，可以根据具体的业务需求选择不同的实现方式。
+
+对于博客创建一个点赞用户的集合，然后检查该集合中是否包含用户的ID。这种方式适用于在一个博客上可能有多个用户点赞的情况，可以方便地判断某个用户是否给某篇博客点赞。
+
+对于用户创建一个点赞的博客集合，然后检查该集合中是否包含博客的ID。这种方式适用于一个用户可能点赞多篇博客的情况，可以方便地判断某篇博客是否被某个用户点赞。
+
+很明显，用户数量远大于博客数量，维护博客的点赞集合明显更合适。
+
+```java
+// 博客点赞
+public void likeBlog(Long id) {
+  long userId = StpUtil.getLoginIdAsLong();
+  String key = BLOG_LIKED_KEY + id;
+  Double score = stringRedisTemplate.opsForZSet().score(key, Long.toString(userId));
+  //为null，则表示集合中没有该用户
+  if (score == null) {
+    //点赞数 +1
+    boolean success = update().setSql("liked = liked + 1").eq("id", id).update();
+    //将用户加入set集合
+    if (success) {
+      stringRedisTemplate.opsForZSet().add(key, Long.toString(userId), System.currentTimeMillis());
+    }
+  //如果当前用户已点赞，则取消点赞，将用户从set集合中移除
+  } else {
+    //点赞数 -1
+    boolean success = update().setSql("liked = liked - 1").eq("id", id).update();
+    if (success) {
+    //从set集合移除
+      stringRedisTemplate.opsForZSet().remove(key, Long.toString(userId));
+    }
+  }
+}
+```
+
+```java
+// 查询博客点赞排行前五
+Set<String> top5 = stringRedisTemplate.opsForZSet().range(key, 0, 4);
+```
+
+```
+// 获取共同点赞
+// 对两个set取交集
+Set<String> intersect = stringRedisTemplate.opsForSet().intersect(key1, key2);
+```
+
+## Feed流
+
+当关注了用户之后，这个用户发布了动态，那应该把这些数据推送给用户，这个需求，又称其为Feed流
+
+实现模式
+
+1. Timeline：不做内容筛选，简单的按照内容发布时间排序，常用于好友或关注(B站关注的up，朋友圈等)
+优点：信息全面，不会有缺失，并且实现也相对简单
+缺点：信息噪音较多，用户不一定感兴趣，内容获取效率低
+2. 智能排序：利用智能算法屏蔽掉违规的、用户不感兴趣的内容，推送用户感兴趣的信息来吸引用户
+优点：投喂用户感兴趣的信息，用户粘度很高，容易沉迷
+缺点：如果算法不精准，可能会起到反作用（给你推的你都不爱看）
+
+### Timeline的三种模式
+
+**推模式**
+
+当张三给李四和王五发了消息之后，都会保存到自己的发件箱中，如果李四要读取消息，那么他会读取他自己的收件箱，此时系统会从他关注的人群中，将他关注人的信息全都进行拉取，然后进行排序
+
+- 优点：比较节约空间，因为李四在读取信息时，并没有重复读取，并且读取完之后，可以将他的收件箱清除
+- 缺点：有延迟，当用户读取数据时，才会去关注的人的发件箱拉取信息，假设该用户关注了海量用户，此时就会拉取很多信息，服务器压力巨大
+
+**拉模式**
+
+推模式是没有写邮箱的，当张三写了一个内容，此时会主动把张三写的内容发送到它粉丝的收件箱中
+
+- 优点：时效快，不用临时拉取
+- 缺点：内存压力大，假设一个大V发了一个动态，很多人关注他，那么就会写很多份数据到粉丝那边去
+
+**推拉模式**
+
+推拉结合，如果是大V就用推模式，如果是普通用户就用拉模式
+
+### 实现推送
+
+收件箱应该能满足可以按照时间戳排序，使用redis实现并支持feed流查询
+
+t1时刻，读取第一页，page=1，size=5，拿到10 ~ 6的记录，设t2时刻发布一条新纪录，那么在t3时刻，读取第二页，此时page=2，size = 5，此时读到的是6 ~ 2，读到了重复的数据，所以要使用Feed流的分页，不能使用传统分页
+
+**解决方法**：
+
+- **使用基于游标的分页**：在这种方法中，我们不再使用偏移量来获取下一批记录，而是使用上一批中最后一条记录的某个唯一字段（如ID）作为游标。然后，我们可以获取ID大于（或小于）该游标的下一批记录。这样，即使有新的记录插入，也不会影响我们获取的结果。
+- **分页过程中锁定数据**：防止新的插入操作。但是，这种方法可能会对性能产生影响，并且在处理大量数据时可能不太可行。
+
+## GEO的使用
+
+GEO就是Geolocation的简写形式，代表地理坐标。Redis在3.2版本中加入了对GEO的支持，允许存储地理坐标信息，帮助我们根据经纬度来检索数据
+
+常见命令
+
+```
+GEOADD key longitude latitude member [longitude latitude member …]
+// 添加到sorted set元素的数⽬，但不包括已更新score的元素
+// 例:  GEOADD china 13.361389 38.115556 "shanghai" 15.087269 37.502669 "beijing"
+
+GEODIST key member1 member2 [m|km|ft|mi]
+// 计算指定的两个点之间的距离并返回
+// 默认使用米为单位，在计算时会假设地球为完美的球
+// 在极限情况下， 这⼀假设最⼤会造成 0.5% 的误差
+// 例: GEODIST china beijing shanghai km
+
+GEOHASH key member [member …]
+// 将指定member的坐标转化为hash字符串形式并返回
+
+GEOPOS key member [member …]
+// 返回指定member的坐标
+
+GEORADIUS key longitude latitude radius m|km|ft|mi [WITHCOORD] [WITHDIST] [WITHHASH] 
+[COUNT count [ANY]] [ASC|DESC] [STORE key] [STOREDIST key]
+// 指定圆心、半径，找到该园内包含的所有member，并按照与圆心之间的距离排序后返回
+
+// 6.2之后已废弃
+// WITHDIST: 在返回位置元素的同时， 将位置元素与中心之间的距离也一并返回。 距离的单位和用户给定的范围单位保持一致。
+// WITHCOORD: 将位置元素的经度和维度也一并返回。
+// 例子: GEORADIUS china 15 37 200 km WITHDIST
+
+GEOSEARCH key [FROMMEMBER member] [FROMLONLAT longitude latitude] [BYRADIUS radius m|km|ft|mi] 
+[BYBOX width height m|km|ft|mi] [ASC|DESC] [COUNT count [ANY]] [WITHCOORD] [WITHDIST] [WITHHASH]
+// 在指定范围内搜索member，并按照与制定点之间的距离排序后返回，范围可以使圆形或矩形
+// 6.2的新功能
+```
+
+**使用示例**
+
+```java
+@RestController
+public class TestController {
+
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
+
+    // 更新商户位置信息
+    @PostMapping("/{shopId}/location")
+    public void updateUserLocation(@PathVariable Long shopId,
+                                   @RequestParam Double longitude,
+                                   @RequestParam Double latitude) {
+
+        String userLocationKey = "shop:location:";
+        // 使用Redis的地理位置操作对象，将用户的经纬度信息添加到指定的key中
+        stringRedisTemplate.opsForGeo().add(userLocationKey, new Point(longitude, latitude), shopId.toString());
+    }
+    
+    // 查询附近的商户
+    @GetMapping("/nearby")
+    public List<Long> getNearbyUsers(@RequestParam Double longitude,
+                                            @RequestParam Double latitude,
+                                            @RequestParam Integer radius) {
+
+        String shopLocationKey = "shop:location:";
+        Distance distance = new Distance(radius, Metrics.KILOMETERS);
+        Circle circle = new Circle(new Point(longitude, latitude), distance);
+
+        // redis 6.2以下
+        // 使用Redis的地理位置操作对象，在指定范围内查询附近的用户位置信息
+        GeoResults<RedisGeoCommands.GeoLocation<String>> geoResults = stringRedisTemplate
+                .opsForGeo()
+                .radius(shopLocationKey, circle);
+
+        // redis 6.2以上
+        // GeoResults<RedisGeoCommands.GeoLocation<String>> results = stringRedisTemplate.opsForGeo().search(
+        //         shopLocationKey,
+        //         GeoReference.fromCoordinate(longitude, latitude),
+        //         new Distance(5000),
+        //         RedisGeoCommands.GeoSearchCommandArgs.newGeoSearchArgs().includeDistance());
+
+        if (geoResults == null || geoResults.getContent().isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        ArrayList<Long> nearByShopIds = new ArrayList<>();
+        for (GeoResult<RedisGeoCommands.GeoLocation<String>> geoResult : geoResults.getContent()) {
+            Long shopId = Long.valueOf(geoResult.getContent().getName());
+            nearByShopIds.add(shopId);
+        }
+        return nearByShopIds;
+    }
+}
+```
+
+## 用户签到
+
+用户签到统计如果用mysql来做，数据量过于庞大，我们可以利用二级制位来表示每个月的签到情况，签到为1，不签到为0
+
+BitMap的操作命令
+
+```
+SETBIT：向指定位置（offset）存入一个0或1
+GETBIT：获取指定位置（offset）的bit值
+BITCOUNT：统计BitMap中值为1的bit位的数量
+BITFIELD：操作（查询、修改、自增）BitMap中bit数组中的指定位置（offset）的值
+BITFIELD_RO：获取BitMap中bit数组，并以十进制形式返回
+BITOP：将多个BitMap的结果做位运算（与、或、异或）
+BITPOS：查找bit数组中指定范围内第一个0或1出现的位置
+```
+
+```java
+// 签到
+public void sign() {
+    //1. 获取当前用户
+    Long userId = StpUtil.getLoginIdAsLong();
+    //2. 获取日期
+    LocalDateTime now = LocalDateTime.now();
+    //3. 拼接key
+    String keySuffix = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
+    String key = USER_SIGN_KEY + userId + keySuffix;
+    //4. 获取今天是当月第几天(1~31)
+    int dayOfMonth = now.getDayOfMonth();
+    //5. 写入Redis  BITSET key offset 1
+    stringRedisTemplate.opsForValue().setBit(key, dayOfMonth - 1, true);
+}
+```
+
+```java
+// 统计累计签到天数
+public int signCount() {
+    //1. 获取当前用户
+    Long userId = StpUtil.getLoginIdAsLong();
+    //2. 获取日期
+    LocalDateTime now = LocalDateTime.now();
+    //3. 拼接key
+    String keySuffix = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
+    String key = USER_SIGN_KEY + userId + keySuffix;
+    //4. 获取今天是当月第几天(1~31)
+    int dayOfMonth = now.getDayOfMonth();
+    //5. 获取截止至今日的签到记录  BITFIELD key GET uDay 0
+    List<Long> result = stringRedisTemplate.opsForValue().bitField(key, BitFieldSubCommands.create()
+            .get(BitFieldSubCommands.BitFieldType.unsigned(dayOfMonth)).valueAt(0));
+    if (result == null || result.isEmpty()) {
+        return Result.ok(0);
+    }
+    //6. 循环遍历
+    int count = 0;
+    Long num = result.get(0);
+    // 统计出当前连续签到的天数
+    while (true) {
+        if ((num & 1) == 0) {
+            break;
+        } else
+            count++;
+        //数字右移，抛弃最后一位
+        num >>>= 1;
+    }
+    count;
+}
+```
+
+## UV统计
+
+UV：全称Unique Visitor，也叫独立访客量，是指通过互联网访问、浏览这个网页的自然人。1天内同一个用户多次访问该网站，只记录1次。
+
+PV：全称Page View，也叫页面访问量或点击量，用户每访问网站的一个页面，记录1次PV，用户多次打开页面，则记录多次。往往用来衡量网站的流量。
+
+UV统计在服务端做会很麻烦，因为要判断该用户是否已经统计过了，需要将统计过的信息保存
+
+HyperLogLog(HLL)是从Loglog算法派生的概率算法，用户确定非常大的集合基数，而不需要存储其所有值，算法相关原理可以参考下面这篇文章：[HyperLog原理](https://juejin.cn/post/6844903785744056333#heading-0)
+
+Redis中的HLL是基于string结构实现的，单个HLL的内存永远小于16kb，内存占用低的令人发指！作为代价，其测量结果是概率性的，有小于0.81％的误差。不过对于UV统计来说，这完全可以忽略。
+
+常用方法
+
+```
+PFADD key element [element...]
+summary: Adds the specified elements to the specified HyperLogLog
+
+PFCOUNT key [key ...]
+Return the approximated cardinality of the set(s) observed by the HyperLogLog at key(s).
+
+PFMERGE destkey sourcekey [sourcekey ...]
+lnternal commands for debugging HyperLogLog values
+```
+
+**简单测试**
+
+```java
+@Test
+public void testHyperLogLog() {
+    String[] users = new String[1000];
+    int j = 0;
+    for (int i = 0; i < 1000000; i++) {
+        j = i % 1000;
+        users[j] = "user_" + i;
+        if (j == 999) {
+            stringRedisTemplate.opsForHyperLogLog().add("HLL", users);
+        }
+    }
+    Long count = stringRedisTemplate.opsForHyperLogLog().size("HLL");
+    System.out.println("count = " + count);
+}
+
+// 插入100W条数据，得到的count为997593，误差率为0.002407%
+// Redis图形化界面中查看占用情况为：12.3K字节
+```
+
+## 小结
+
+本文针对Redis基于内存的特性，详细介绍了Redis作为缓存的用法，还有Redis其他的的应用场景。
+
+希望对你有帮助，感觉你的阅读

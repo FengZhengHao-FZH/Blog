@@ -1,0 +1,208 @@
+---
+title: '使用Redis统计文章的阅读量'
+date: 2023-03-15T11:17:26Z
+tags: ['redis']
+summary: '本文本文介绍了传统浏览量的去重问题，通过使用Redis的HyperLogLog的AOP代理类实现了博客的浏览量统计功能。'
+layout: PostLayout
+bibliography: references-data.bib
+---
+
+## 问题描述
+
+在系统开发时，经常会遇到数据的统计问题，如：网站昨日访问人数是多少，博客的浏览人数是多少。
+
+> 所谓基数就是独一无二的内容个数，或者称为去重之后的数。
+
+例如：最近5分钟访问网站的用户ID流水为 {1001,1002,1001,1003}，其基数即为3。 当数据量不大时，我们用数组、map、hashmap、bitmap都可以达到去重效果，先在集合中检查ID是否已存在，若存在，则该次流水不插入，以此来做基数计算。
+
+但是当面对海量数据时，如网站UV为一百万、一千万，该方案需要消耗大量内存来记录原始数据，同时该查重过程也非常耗时。
+
+有没有一种简单的基数计算方案，消耗内存少、计算速度快？
+
+使用Redis的HyperLogLog数据库即可完成统计，但是其有一个假设前提，它是**基于统计学的估计**，是一种非精确计算，误差率在1%左右。 其误差率与消耗内存大小、基数大小均有关系。
+
+下文以统计博客的浏览人数为例，了解HyperLogLog的使用。
+
+## 实现要点
+
+这里有一个问题，用户访问博客时，新增浏览量的代码应该写在哪里？
+
+写在请求博客的方法里吗？
+
+```java
+public Post getPostById(Long Id){
+  // 从数据库中获取博客信息
+  // 将用户的ip保存到redis中
+  // 返回博客信息
+}
+```
+
+这样子操作是可以的，不过会添加耦合度。
+
+在这里，创建一个代理类，用于拦截用户访问博客的请求，并在拦截过程中更新博客的浏览量计数。这种方式可以更好地分离关注点，将更新浏览量的逻辑独立出来，使代码更加模块化和可维护。
+
+## 编码实现
+
+引入依赖
+
+```
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-starter-aop</artifactId>
+</dependency>
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-starter-data-redis</artifactId>
+</dependency>
+```
+
+配置Redis
+
+```yaml
+spring:
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      database: 2
+```
+
+定义注解
+
+```java
+@Documented
+@Retention(RetentionPolicy.RUNTIME)
+@Target({ElementType.PARAMETER, ElementType.METHOD})
+public @interface PostView {
+    /**
+     * 描述
+     */
+    String description()  default "";
+}
+```
+
+定义切面
+
+```java
+@Aspect
+@Slf4j
+@Configuration
+public class PostViewAspect {
+  
+    @Resource
+    private StringRedisTemplate stringRedisTemplate
+    
+
+    /**
+     * 获取当前的ServletRequest
+     * @return Servlet
+     */
+    protected HttpServletRequest servletRequest() {
+        return ((ServletRequestAttributes) Objects.requireNonNull(RequestContextHolder.getRequestAttributes())).getRequest();
+    }
+
+    /**
+     * 定义切点
+     */
+    @Pointcut("@annotation(com.example.palette.annotation.PostView)")
+    public void postViewPointCut(){}
+
+    /**
+     * 切入处理，环绕通知
+     * @param joinPoint 切入点
+     * @return 执行原始方法
+     */
+    @Around("postViewPointCut()")
+    public Object around(ProceedingJoinPoint joinPoint) throws Throwable {
+        Object[] args = joinPoint.getArgs();
+        Object postId = args[0];
+        Object obj = null;
+        try {
+            // 获取请求的ip
+            String ipAddr = IpUtils.getIpAddr(servletRequest());
+            log.info("请求Ip：{}",ipAddr);
+            // 设置存入的key
+            log.info("请求的postId：{}",postId);
+            String key = RedisConstants.POST_VIEW_KEY + postId;
+            // 将存入到缓存中
+            Long count = stringRedisTemplate.opsForHyperLogLog().add(key, value);
+            if (count == 0){
+                log.info("该Ip：{}已经访问过了",ipAddr);
+            }
+            obj = joinPoint.proceed();
+        }catch (Exception e){
+            e.fillInStackTrace();
+        }
+        return obj;
+    }
+}
+```
+
+IpUtils工具类
+
+```java
+public class IpUtils {
+
+    private static final String UNKNOWN = "unknown";
+    private static final String LOCALHOST = "127.0.0.1";
+    private static final int IP_LENGTH = 15;
+    private static final String DELIMITER = ",";
+
+    /**
+     * 获取客户端IP地址
+     * @param request 请求
+     * @return id地址
+     */
+    public static String getIpAddr(HttpServletRequest request) {
+        String ip = request.getHeader("x-forwarded-for");
+        if (ip == null || ip.length() == 0 || UNKNOWN.equalsIgnoreCase(ip)) {
+            ip = request.getHeader("Proxy-Client-IP");
+        }
+        if (ip == null || ip.length() == 0 || UNKNOWN.equalsIgnoreCase(ip)) {
+            ip = request.getHeader("WL-Proxy-Client-IP");
+        }
+        if (ip == null || ip.length() == 0 || UNKNOWN.equalsIgnoreCase(ip)) {
+            ip = request.getRemoteAddr();
+            if (LOCALHOST.equals(ip)) {
+                //根据网卡取本机配置的IP
+                InetAddress inet = null;
+                try {
+                    inet = InetAddress.getLocalHost();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+                assert inet != null;
+                ip = inet.getHostAddress();
+            }
+        }
+        // 多个代理的情况，第一个IP为客户端真实IP,多个IP按照','分割
+        if (ip != null && ip.length() > IP_LENGTH) {
+            if (ip.indexOf(DELIMITER) > 0) {
+                ip = ip.substring(0, ip.indexOf(","));
+            }
+        }
+        return ip;
+    }
+}
+```
+
+在查看博客接口上加上自定义注解即可在访问该接口时新增浏览量
+
+```java
+@PostView
+@GetMapping("/{id}")
+public Result<PostDTO> getPostById(@PathVariable Long id){
+  return Result.success(postService.getPostById(id));
+}
+```
+
+```java
+// 获取博客的浏览量
+stringRedisTemplate.opsForHyperLogLog().size(key)
+```
+
+## 小结
+
+本文介绍了传统浏览量的去重问题，通过使用Redis的HyperLogLog的AOP代理类实现了博客的浏览量统计功能，需要注意的是HyperLogLog是**基于统计学的估计**，其结果并不是完全准确的，误差率在1%左右。
+
+希望对你有帮助，感谢你的阅读

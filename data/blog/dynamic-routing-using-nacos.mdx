@@ -1,0 +1,359 @@
+---
+title: '使用Nacos + Gateway 实现动态路由配置'
+date: 2023-09-18T18:22:54Z
+tags: ['gateway','nacos']
+summary: '本文主要介绍传统网关的问题，并以Spring Cloud Gateway为框架，Nacos作为数据源实现了动态路由。'
+layout: PostLayout
+bibliography: references-data.bib
+---
+
+## 问题描述
+
+网关的路由配置无论是编写在代码里面还是在配置文件中配置，每当有新的程序需要接入到网关进行路由或者有服务需要下线时候需要修改代码或者配置，然后重启整个网关程序，导致其他正常的服务路由受到了影响
+
+> 网关是对客户端的入口与出口，在生产运行中极为重要，哪怕是简单的重启也会导致部分请求的丢失。
+
+所以在实际生产环境中为了保证高可靠和高可用，是尽量要避免重启网关，所以实现动态路由是非常有必要的
+
+本文以Spring Cloud Gateway为框架，使用Nacos作为数据源实现动态路由
+
+## 实现要点
+
+要实现动态路由只需关注下面4个点
+
+1. 网关启动时，动态路由的数据怎样加载进来
+2. 数据有变化时怎样通知gateway刷新路由
+3. 如何监听动态路由的数据源变化
+4. 静态路由与动态路由以那个为准
+
+> 答：配置文件中的路由规则会先加载并生效，然后Nacos中的路由配置会覆盖配置文件中的路由信息，从而使Nacos中的路由生效
+
+## 架构设计思路
+
+### Nacos配置文件的加载
+
+对于动态路由数据如何加载进来，可以使用Nacos SDK提供的一个用于与Nacos配置中心进行交互的服务类：ConfigService。
+
+通过调用NacosFactory.createConfigService()方法，传入一个properties对象，来创建一个ConfigService实例。
+
+```java
+Properties properties = new Properties();
+// 至少需要指定nacos地址和命名空间
+properties.put(PropertyKeyConst.SERVER_ADDR, serverAddr);
+properties.put(PropertyKeyConst.NAMESPACE, namespace);
+ConfigService configService = NacosFactory.createConfigService(properties);
+```
+
+然后调用configService.getConfig()来获取到存储在Nacos上的配置文件
+
+```java
+// 根据dataId和group获取配置文件
+String initConfig = configService.getConfig(dataId, group, 5000);
+```
+
+Gateway中有存储路由配置的类RouteDefinition，对应spring:application:cloud:gateway:routes:下的配置
+
+对于上文获取到的initConfig，反序列化为RouteDefinition列表
+
+```java
+// 用Jackson反序列化
+List<RouteDefinition> routeDefinitions = null;
+try {
+  routeDefinitions = objectMapper.readValue(configStr, new TypeReference<List<RouteDefinition>>() {
+});
+} catch (JsonProcessingException e) {
+  log.error("get route definition from nacos string error", e);
+}
+```
+
+### 更新和发布路由
+
+RouteDefinitionWriter是Spring Cloud Gateway中的一个接口，用于将路由定义写入到路由规则存储中。
+
+通过调用其的save和delete方法来进行路由规则的存储。
+
+要更新路由规则，可以先删除全部路由，然后加载新的路由规则。
+
+```java
+private RouteDefinitionWriter routeDefinitionWriter;
+// 存储响应流ID
+private static final List<String> routeList = new ArrayList<>();
+/**
+  * 清理集合中的所有路由，并清空集合
+  */
+private void clear() {
+  // 全部调用API清理掉
+  try {
+    routeList.forEach(id -> routeDefinitionWriter.delete(Mono.just(id)).subscribe());
+  } catch (Exception e) {
+    log.error("clear Route is error !");
+  }
+  // 清空集合
+  routeList.clear();
+}
+
+/**
+  * 新增路由
+  *
+  * @param routeDefinitions
+  */
+private void add(List<RouteDefinition> routeDefinitions) {
+  try {
+    routeDefinitions.forEach(routeDefinition -> {
+    routeDefinitionWriter.save(Mono.just(routeDefinition)).subscribe();
+    routeList.add(routeDefinition.getId());
+  });
+  } catch (Exception exception) {
+    log.error("add route is error", exception);
+  }
+}
+```
+
+此处设计到响应式编程的概念
+
+[了解Reactor](https://skyao.io/learning-reactor/docs.html)
+
+更新后，还需要通知gateway刷新路由
+
+```java
+//调用ApplicationEventPublisher来发布
+private void publish() {
+  applicationEventPublisher.publishEvent(new RefreshRoutesEvent(routeDefinitionWriter));
+}
+```
+
+### 监听配置文件变化
+
+对于监听配置文件变化，可以调用ConfigService(用于与Nacos配置中心进行交互的服务类)来添加监听器
+
+```java
+configService.addListener(dataId, group, new Listener() {
+  @Override
+  public void receiveConfigInfo(String configInfo) {
+    // 更新路由
+  }
+  @Override
+  public Executor getExecutor() {
+    return null;
+  }
+});
+```
+
+## 完整代码
+
+RouteOperator类，提供网关进程的删除、添加等操作，对外提供更新。
+
+```java
+@Slf4j
+public class RouteOperator {
+    private ObjectMapper objectMapper;
+
+    private RouteDefinitionWriter routeDefinitionWriter;
+
+    private ApplicationEventPublisher applicationEventPublisher;
+
+    private static final List<String> routeList = new ArrayList<>();
+
+    public RouteOperator(ObjectMapper objectMapper, RouteDefinitionWriter routeDefinitionWriter, ApplicationEventPublisher applicationEventPublisher) {
+        this.objectMapper = objectMapper;
+        this.routeDefinitionWriter = routeDefinitionWriter;
+        this.applicationEventPublisher = applicationEventPublisher;
+    }
+
+    /**
+     * 清理集合中的所有路由，并清空集合
+     */
+    private void clear() {
+        // 全部调用API清理掉
+        try {
+            routeList.forEach(id -> routeDefinitionWriter.delete(Mono.just(id)).subscribe());
+        } catch (Exception e) {
+            log.error("clear Route is error !");
+        }
+        // 清空集合
+        routeList.clear();
+    }
+
+    /**
+     * 新增路由
+     *
+     * @param routeDefinitions
+     */
+    private void add(List<RouteDefinition> routeDefinitions) {
+
+        try {
+            routeDefinitions.forEach(routeDefinition -> {
+                routeDefinitionWriter.save(Mono.just(routeDefinition)).subscribe();
+                routeList.add(routeDefinition.getId());
+            });
+        } catch (Exception exception) {
+            log.error("add route is error", exception);
+        }
+    }
+
+    /**
+     * 发布进程内通知，更新路由
+     */
+    private void publish() {
+        applicationEventPublisher.publishEvent(new RefreshRoutesEvent(routeDefinitionWriter));
+    }
+
+    /**
+     * 更新所有路由信息
+     *
+     * @param configStr
+     */
+    public void refreshAll(String configStr) {
+        log.info("start refreshAll : {}", configStr);
+        // 无效字符串不处理
+        if (!StringUtils.hasText(configStr)) {
+            log.error("invalid string for route config");
+            return;
+        }
+        // 用Jackson反序列化
+        List<RouteDefinition> routeDefinitions = null;
+        try {
+            routeDefinitions = objectMapper.readValue(configStr, new TypeReference<List<RouteDefinition>>() {
+            });
+        } catch (JsonProcessingException e) {
+            log.error("get route definition from nacos string error", e);
+        }
+        // 如果等于null，表示反序列化失败，立即返回
+        if (null == routeDefinitions) {
+            log.error("serialization failure");
+            return;
+        }
+        // 清理掉当前所有路由
+        clear();
+        // 添加最新路由
+        add(routeDefinitions);
+
+        // 通过应用内消息的方式发布
+        publish();
+
+        log.info("finish refreshAll");
+    }
+}
+```
+
+RouteConfigListener类，监听nacos路由配置信息，获取配置信息后刷新进程内路由信息
+
+> 当一个类使用@PostConstruct注解标记一个方法时，这个方法将在依赖注入完成后立即执行。换句话说，它会在构造函数执行之后、依赖注入完成之后被调用。
+> 
+> 使用@PostConstruct注解有以下几个特点：
+> 
+> - 一个类可以有多个被@PostConstruct注解标记的方法，它们会按照定义的顺序依次执行。
+> - 这些方法不能有任何参数，因为它们会在实例化后立即被调用。
+> - @PostConstruct方法可以有任意的访问修饰符（public、protected、private等）。
+> - @PostConstruct注解只能用于非静态方法。
+
+```java
+@Slf4j
+@Component
+public class RouteConfigListener {
+    @Value("${spring.cloud.nacos.config.dataId}")
+    private String dataId;
+    @Value("${spring.cloud.nacos.config.server-addr}")
+    private String serverAddr;
+    @Value("${spring.cloud.nacos.config.namespace}")
+    private String namespace;
+    @Value("${spring.cloud.nacos.config.group}")
+    private String group;
+
+    @Resource
+    RouteOperator routeOperator;
+
+    @PostConstruct
+    public void dynamicRouteByNacosListener() throws NacosException {
+        log.info("dynamicRouteByNacosListener config serverAddr is {} namespace is {} group is {}", serverAddr, namespace, group);
+        Properties properties = new Properties();
+        properties.put(PropertyKeyConst.SERVER_ADDR, serverAddr);
+        properties.put(PropertyKeyConst.NAMESPACE, namespace);
+        ConfigService configService = NacosFactory.createConfigService(properties);
+        // 添加监听，nacos上的配置变更后会执行
+        configService.addListener(dataId, group, new Listener() {
+            @Override
+            public void receiveConfigInfo(String configInfo) {
+                // 解析和处理都交给RouteOperator完成
+                routeOperator.refreshAll(configInfo);
+            }
+
+            @Override
+            public Executor getExecutor() {
+                return null;
+            }
+        });
+
+        // 获取当前的配置
+        String initConfig = configService.getConfig(dataId, group, 5000);
+
+        // 立即更新
+        routeOperator.refreshAll(initConfig);
+    }
+}
+```
+
+RouteOperatorConfig类，将RouteOperator类作为Bean挂载到Spring中
+
+```java
+@Configuration
+public class RouteOperatorConfig {
+    @Bean
+    public RouteOperator routeOperator(ObjectMapper objectMapper,
+                                       RouteDefinitionWriter routeDefinitionWriter,
+                                       ApplicationEventPublisher applicationEventPublisher) {
+
+        return new RouteOperator(objectMapper,
+                routeDefinitionWriter,
+                applicationEventPublisher);
+    }
+}
+```
+
+## 测试
+
+假设我们有三个微服务项目product，custom和gateway，gateway部署在8080端口，在nacos创建gateway的配置文件，选择Json格式
+
+```json
+[
+  {
+    "id": "product",
+    "uri": "lb://product",
+    "predicates": [
+      {
+        "name": "Path",
+        "args": {
+          "pattern": "/product/**"
+        }
+      }
+    ]
+  }
+]
+```
+
+访问localhost:8080/product/，可以发现请求成功，访问localhost:8080/custom/，可以发现服务不存在
+
+不关闭gateway项目，在nacos上的配置文件中新增内容
+
+```json
+{
+  "id": "custom",
+  "uri": "lb://custom",
+  "predicates": [
+    {
+      "name": "Path",
+      "args": {
+        "pattern": "/custom/**"
+      }
+    }
+  ]
+}
+```
+
+访问localhost:8080/custom/，可以发现请求成功
+
+## 小结
+
+本文以Spring Cloud Gateway为框架，使用Nacos作为注册和配置中心，利用ConfigService解析配置文件，RouteDefinitionWriter来更新路由配置，使用ApplicationEventPublisher来发布事件，最后为配置文件添加监听器，实现动态路由。
+
+希望对你有帮助，感谢你的阅读

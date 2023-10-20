@@ -1,0 +1,9 @@
+{
+  "redis":3,
+  "数据库":2,
+  "设计模式":1,
+  "gateway": 2,
+  "nacos": 2,
+  "spring cloud":1,
+  "xxl-job": 1
+}

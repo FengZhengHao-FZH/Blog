@@ -1,0 +1,455 @@
+---
+title: 'Redis：高效的键值型NoSQL数据库'
+date: 2023-01-20T15:32:14Z
+tags: ['redis', '数据库']
+summary: '本文介绍了Redis作为一种键值型的NoSQL数据库的特点，以及与传统关系型数据库的区别和优势。同时，还介绍了Redis的安装和使用方式，对于Redis的每个基本类型进行了说明。'
+layout: PostLayout
+bibliography: references-data.bib
+---
+
+写在开始
+------------------------------
+
+Redis 是一种键值型的 NoSQL 数据库，这里有两个关键字
+
+- 键值型
+- NoSQL
+
+其中`键值型`是指 Redis 中存储的数据都是以 Key-Value 键值对的形式存储，而 Value 的形式多种多样，可以使字符串、数值甚至 Json
+
+而 NoSQL 则是相对于传统关系型数据库，有很大差异
+
+认识 NoSQL
+------------------------------
+
+`NoSql`可以翻译做 Not Only Sql（不仅仅是 SQL），或者是 No Sql（非 Sql 的）数据库。是相对于传统关系型数据库有很大差异的一种特殊的数据库，因此也称之为`非关系型数据库`。
+
+**结构化与非结构化**
+
+传统关系型数据库是结构化数据，每张表在创建的时候都有严格的约束信息，如字段名、字段数据类型、字段约束等，插入的数据必须遵循这些约束
+
+而 NoSQL 则对数据库格式没有约束，可以是键值型，也可以是文档型，甚至是图格式
+
+**关联与非关联**
+
+传统数据库的表与表之间往往存在关联，例如外键约束
+而非关系型数据库不存在关联关系，要维护关系要么靠代码中的业务逻辑，要么靠数据之间的耦合
+
+```json
+{
+  "id": 1,
+  "name": "张三",
+  "orders": [
+    {
+      "id": 1,
+      "item": {
+        "id": 10, "title": "荣耀6", "price": 4999
+      }
+    },
+    {
+      "id": 2,
+      "item": {
+        "id": 20, "title": "小米11", "price": 3999
+      }
+    }
+  ]
+}
+```
+
+例如此处要维护张三与两个手机订单的关系，不得不冗余的将这两个商品保存在张三的订单文档中，不够优雅，所以建议使用业务逻辑来维护关联关系
+
+**查询方式**
+
+传统关系型数据库会基于 Sql 语句做查询，语法有统一的标准
+
+```
+SELECT id, age FROM tb_user WHERE id = 1
+```
+
+而不同的非关系型数据库查询语法差异极大
+
+```
+Redis:  get user:1
+MongoDB: db.user.find({_id: 1})
+elasticsearch:  GET http://localhost:9200/users/1
+```
+
+**事务**
+
+传统关系型数据库能满足事务的 ACID 原则 (原子性、一致性、独立性及持久性)
+而非关系型数据库往往不支持事务，或者不能保证 ACID 的特性，只能实现基本的一致性
+
+### SQL与NoSQL对比
+
+||SQL|NoSQL|
+|--|:--|--|
+|数据结构|结构化|非结构化|
+|数据关联|关联的|无关联的|
+|查询方式|SQL 查询|非 SQL|
+|事务特性|ACID|BASE|
+|存储方式|磁盘|内存|
+|扩展性|垂直|水平|
+
+存储方式
+
+- 关系型数据库基于磁盘进行存储，会有大量的磁盘 IO，对性能有一定影响
+- 非关系型数据库，他们的操作更多的是依赖于内存来操作，内存的读写速度会非常快，性能自然会好一些
+
+扩展性
+
+- 关系型数据库集群模式一般是主从，主从数据一致，起到数据备份的作用，称为垂直扩展。
+- 非关系型数据库可以将数据拆分，存储在不同机器上，可以保存海量数据，解决内存大小有限的问题。称为水平扩展。
+- 关系型数据库因为表之间存在关联关系，如果做水平扩展会给数据查询带来很多麻烦
+
+使用场景
+
+- 关系型数据库数据结构固定，适合在对一致性安全性要求较高的情况下使用
+- 非关系型数据库数据结构不固定，适合在对一致性安全性要求不高或对性能有要求的情况下使用
+
+认识 Redis
+------------------------------
+
+Redis 诞生于 2009 年，全称是 Remote Dictionary Server 远程词典服务器，是一个基于内存的键值型 NoSQL 数据库。
+
+特征：
+
+- 键值 (Key-Value) 型，Value 支持多种不同的数据结构，功能丰富
+- 单线程，每个命令具有原子性
+- 低延迟，速度快 (基于内存、IO 多路复用、良好的编码)
+- 支持数据持久化
+- 支持主从集群、分片集群
+- 支持多语言客户端
+
+作者：Antirez
+
+Redis 官网：[https://redis.io/](https://redis.io/)
+
+安装 Redis
+------------------------------
+
+参考菜鸟教程：[https://www.runoob.com/redis/redis-install.html](https://www.runoob.com/redis/redis-install.html)
+
+Redis 桌面客户端
+---------------------------------------
+
+安装完成 Redis，我们就可以操作 Redis，实现数据的 CRUD 了。这需要用到 Redis 客户端，包括：
+
+- 命令行客户端
+- 图形化桌面客户端
+- 编程客户端
+
+ **Redis 命令行客户端**
+
+Redis 安装完成后就自带了命令行客户端：redis-cli，使用方式如下：
+
+```
+redis-cli [options] [commonds]
+```
+
+其中常见的 options 有：
+
+- `-h 127.0.0.1`：指定要连接的 redis 节点的 IP 地址，默认是 127.0.0.1
+- `-p 6379`：指定要连接的 redis 节点的端口，默认是 6379
+- `-a 123456`：指定 redis 的访问密码
+
+其中的 commonds 就是 Redis 的操作命令，例如：
+
+- `ping`：与 redis 服务端做心跳测试，服务端正常会返回 `pong`
+
+**图形化桌面客户端**
+
+建议使用RedisInsight
+
+Redis 默认有 16 个仓库，编号从 0 至 15. 通过配置文件可以设置仓库数量，但是不超过 16，并且不能自定义仓库名称。
+
+如果是基于 redis-cli 连接 Redis 服务，可以通过 select 命令来选择数据库：
+
+```
+select 0
+```
+
+Redis 通用命令
+------------------------------------
+
+常用的通用命令有以下几个
+
+|命令|描述|
+|--|--|
+|KEYs pattern|查找所有符合给定模式 (pattern) 的 key|
+|EXISTs key|检查给定 key 是否存在|
+|TYPE key|返回 key 所储存的值的类型|
+|TTL key|返回给定 key 的剩余生存时间 (TTL, time to live)，以秒为单位|
+|DEL key|该命令用于在 key 存在是删除 key|
+
+- `KEYS`：查看符合模板的所有 key
+  - 不建议在生产环境设备上使用，因为 Redis 是单线程的，执行查询的时候会阻塞其他命令，当数据量很大的时候，使用 KEYS 进行模糊查询，效率很差
+- `DEL`：删除一个指定的 key
+  - 也可以删除多个 key，`DEL name age`，会将 name 和 age 都删掉
+- `EXISTS`：判断 key 是否存在
+  - `EXISTS name`，如果存在返回 1，不存在返回 0
+- `EXPIRE`：给一个 key 设置有效期，有效期到期时该 key 会被自动删除
+  - `EXPIRE name 20`，给 name 设置 20 秒有效期，到期自动删除
+- `TTL`：查看一个 key 的剩余有效期 (Time-To-Live)
+  - `TTL name`，查看 name 的剩余有效期，如果未设置有效期，则返回 - 1
+
+### Key 结构
+
+- Redis 没有类似 MySQL 中 Table 的概念，那么我们该如何区分不同类型的 Key 呢？
+- 例如：需要存储用户、商品信息到 Redis，有一个用户的 id 是 1，有一个商品的 id 恰好也是 1，如果此时使用 id 作为 key，那么就回冲突，该怎么办？
+- 我们可以通过给 key 添加前缀加以区分，不过这个前缀不是随便加的，有一定的规范
+  - Redis 的 key 允许有多个单词形成层级结构，多个单词之间用`:`隔开，格式如下
+    ```
+    项目名:业务名:类型:id
+    ```
+  - 这个格式也并非是固定的，可以根据自己的需求来删除 / 添加词条，这样我们就可以把不同数据类型的数据区分开了，从而避免了 key 的冲突问题
+  - 例如我们的项目名叫Biki ，有 user 和 product 两种不同类型的数据，我们可以这样定义 key
+    - user 相关的 key：`biki:user:1`
+    - product 相关的 key：`biki:product:1`
+- 如果 value 是一个 Java 对象，例如一个 User 和一个 Product 对象，则可以将对象序列化为 JSON 字符串后存储
+
+|KEY|VALUE|
+|--|--|
+|biki:user:1|["id":1,"name":"rose","age":1]|
+|biki:product:1|["id":1,"name":"最后的轻语"，"price":2800]|
+
+- 并且在 Redis 的桌面客户端中，也会以相同前缀作为层次结构，让数据看起来层次分明，关系清晰
+
+
+## Redis 类型
+
+![redis-value-type](/static/images/blog/redis-base/redis-value-type.png)
+
+String 类型
+---------------------------------
+
+String 类型，也就是字符串类型，是 Redis 中最简单的存储类型
+其 value 是字符串，不过根据字符串的格式不同，又可以分为 3 类
+
+- `string`：普通字符串
+- `int`：整数类型，可以做自增、自减操作
+- `float`：浮点类型，可以做自增、自减操作
+不管是哪种格式，底层都是字节数组形式存储，只不过是编码方式不同，字符串类型的最大空间不能超过 512M
+
+### String 的常用命令
+
+String 的常用命令有
+
+|命令|描述|
+|--|--|
+|SET|添加或者修改一个已经存在的 String 类型的键值对|
+|GET|根据 key 获取 String 类型的 value|
+|MEST|批量添加多个 String 类型的键值对|
+|MGET|根据多个 key 获取多个 String 类型的 valueI|
+|INCR|让一个整形的 key 自增 1|
+|INCRBY|让一个整形的 key 自增并指定步长值|
+|INCRBYFLOAT|让一个浮点类型的数字自增并指定步长值|
+|SETNX|新添加一个 String 类型的键值对|
+|SETEX|添加一个 String 类型的键值对，并指定有效期|
+
+
+
+Hash 类型
+---------------------------
+
+- Hash 类型，也叫散列，其中 value 是一个无序字典，类似于 Java 中的 HashMap 结构
+- String 结构是将对象序列化为 JSON 字符串后存储，当我们要修改对象的某个属性值的时候很不方便
+
+|KEY|VALUE|
+|--|--|
+|biki:user:1|["id":1,"name":"rose","age":1]|
+|biki:product:1|["id":1,"name":"最后的轻语"，"price":2800]|
+
+- Hash 结构可以将对象中的每个字段独立存储，可以针对单个字段做 CRUD
+
+![redis-hash-demo](/static/images/blog/redis-base/redis-hash-demo.png)
+
+- Hash 的常用命令有
+
+|命令|描述|
+|--|--|
+|HSET key field value|添加或者修改hash类型key的field的值|
+|HGET key field|获取一个hash类型key的field的值|
+|HMSET|批量添加多个hash类型key的field的值|
+|HMGET|批量获取多个hash类型key的field的值|
+|HGETALL|获取一个hash类型的key中的所有的field和value|
+|HKEYS|获取一个hash类型的key中的所有的field|
+|HINCRBY|让一个hash类型key的字段值自增并指定步长|
+|HSETNX|新添加一个hash类型的key的field值，要求field不存在|
+
+List 类型
+---------------------------
+
+- Redis 中的 List 类型与 Java 中的 LinkedList 类似，可以看做是一个双向链表结构。既可以支持正向检索和也可以支持反向检索。
+- 特征也与 LinkedList 类似：
+  - 有序
+  - 元素可以重复
+  - 插入和删除快
+  - 查询速度一般
+- 常用来存储一个有序数据，例如：朋友圈点赞列表，评论列表等。
+- List 的常见命令有：
+
+|命令|描述|
+|--|--|
+|LPUSH key element …|向列表左侧插入一个或多个元素|
+|LPOP key|移除并返回列表左侧的第一个元素，没有则返回nil|
+|RPUSH key element …|向列表右侧插入一个或多个元素|
+|RPOP key|移除并返回列表右侧的第一个元素|
+|LRANGE key star end|返回一段角标范围内的所有元素|
+|BLPOP和BRPOP|与LPOP和RPOP类似，只在没有元素时等待指定时间，而不是直接返回nil|
+
+Set 类型
+------------------------
+
+- Redis 的 Set 结构与 Java 中的 HashSet 类似，可以看做是一个 value 为 null 的 HashMap。因为也是一个 hash 表，因此具备与 HashSet 类似的特征：
+  - 无序
+  - 元素不可重复
+  - 查找快
+  - 支持交集、并集、差集等功能
+- Set 的常见命令有：
+
+|命令|描述|
+|--|--|
+|SADD key member …|向set中添加一个或多个元素|
+|SREM key member …|移除set中的指定元素|
+|SCARD key|返回set中元素的个数|
+|SISMEMBER key member|判断一个元素是否存在于set中|
+|SMEMBERS|获取set中的所有元素|
+|SINTER key1 key2 …|求key1与key2的交集|
+|SUNION key1 key2 …|求key1与key2的并集|
+|SDIFF key1 key2 …|求key1与key2的差集|
+
+### 用例
+
+1. 将下列数据用 Redis 的 Set 集合来存储：
+   - 张三的好友有：李四、王五、赵六
+     ```
+     127.0.0.1:6379> sadd zhangsan lisi wangwu zhaoliu
+     (integer) 3
+     ```
+   - 李四的好友有：王五、麻子、二狗
+     ```
+     127.0.0.1:6379> sadd lisi wangwu mazi ergou
+     (integer) 3
+     ```
+2. 利用 Set 的命令实现下列功能：
+   - 计算张三的好友有几人
+     ```
+     127.0.0.1:6379> scard zhangsan
+     (integer) 3
+     ```
+   - 计算张三和李四有哪些共同好友
+     ```
+     127.0.0.1:6379> sinter zhangsan lisi
+     1) "wangwu"
+     ```
+   - 查询哪些人是张三的好友却不是李四的好友
+     ```
+     127.0.0.1:6379> sdiff zhangsan lisi
+     1) "zhaoliu"
+     2) "lisi"
+     ```
+   - 查询张三和李四的好友总共有哪些人
+     ```
+     127.0.0.1:6379> sunion zhangsan lisi
+     1) "wangwu"
+     2) "zhaoliu"
+     3) "ergou"
+     4) "lisi"
+     5) "mazi"
+     ```
+   - 判断李四是否是张三的好友
+     ```
+     127.0.0.1:6379> sismember zhangsan lisi
+     (integer) 1
+     ```
+   - 判断张三是否是李四的好友
+     ```
+     127.0.0.1:6379> sismember lisi zhangsan
+     (integer) 0
+     ```
+   - 将李四从张三的好友列表中移除
+     ```
+     127.0.0.1:6379> srem zhangsan lisi
+     (integer) 1
+     ```
+
+SortedSet 类型
+------------------------------------------
+
+- Redis 的 SortedSet 是一个可排序的 set 集合，与 Java 中的 TreeSet 有些类似，但底层数据结构却差别很大。SortedSet 中的每一个元素都带有一个 score 属性，可以基于 score 属性对元素排序，底层的实现是一个跳表（SkipList）加 hash 表。
+- SortedSet 具备下列特性：
+  - 可排序
+  - 元素不重复
+  - 查询速度快
+- 因为 SortedSet 的可排序特性，经常被用来实现排行榜这样的功能。
+- SortedSet 的常见命令有：
+
+|命令|描述|
+|--|--|
+|ZADD key score member|添加一个或多个元素到sorted set ，如果已经存在则更新其score值|
+|ZREM key member|删除sorted set中的一个指定元素|
+|ZSCORE key member|获取sorted set中的指定元素的score值|
+|ZRANK key member|获取sorted set 中的指定元素的排名|
+|ZCARD key|获取sorted set中的元素个数|
+|ZCOUNT key min max|统计score值在给定范围内的所有元素的个数|
+|ZINCRBY key increment member|让sorted set中的指定元素自增，步长为指定的increment值|
+|ZRANGE key min max|按照score排序后，获取指定排名范围内的元素|
+|ZRANGEBYSCORE key min max|按照score排序后，获取指定score范围内的元素|
+|ZDIFF、ZINTER、ZUNION|求差集、交集、并集|
+
+注意：所有的排名默认都是升序，如果要降序则在命令的 Z 后面添加 REV 即可，例如：
+
+- `升序`获取 sorted set 中的指定元素的排名：ZRANK key member
+- `降序`获取 sorted set 中的指定元素的排名：ZREVRANK key member
+
+### 用例
+
+- 将班级的下列学生得分存入 Redis 的 SortedSet 中：
+- Jack 85, Lucy 89, Rose 82, Tom 95, Jerry 78, Amy 92, Miles 76
+  ```
+  127.0.0.1:6379> zadd stu 85 Jack 89 Lucy 82 Rose 95 Tom 78 Jerry 92 Amy 76 Miles
+  (integer) 7
+  ```
+- 并实现下列功能：
+  - 删除 Tom 同学
+    ```
+    127.0.0.1:6379> zrem stu Tom
+    (integer) 1
+    ```
+  - 获取 Amy 同学的分数
+    ```
+    127.0.0.1:6379> zscore stu Amy
+    "92"
+    ```
+  - 获取 Rose 同学的排名
+    ```
+    127.0.0.1:6379> zrank stu Rose
+    (integer) 2
+    ```
+  - 查询 80 分以下有几个学生
+    ```
+    127.0.0.1:6379> zcount stu 0 80
+    (integer) 2
+    ```
+  - 给 Amy 同学加 2 分
+    ```
+    127.0.0.1:6379> zincrby stu 2 Amy
+    "94"
+    ```
+  - 查出成绩前 3 名的同学
+    ```
+    127.0.0.1:6379> zrange stu 0 2
+    1) "Miles"
+    2) "Jerry"
+    3) "Rose"
+    ```
+  - 查出成绩 80 分以下的所有同学
+    ```
+    127.0.0.1:6379> zrangebyscore stu 0 80
+    1) "Miles"
+    2) "Jerry"
+    ```
+## 小结
+本文介绍了Redis作为一种键值型的NoSQL数据库的特点，以及与传统关系型数据库的区别和优势。同时，还介绍了Redis的安装和使用方式，对于Redis的每个基本类型进行了说明。
+
+希望本文对你有帮助，感谢你的阅读。

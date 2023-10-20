@@ -1,0 +1,499 @@
+---
+title: '以文件的上传为例理解策略模式'
+date: 2023-05-23T18:20:19Z
+tags: ['设计模式']
+summary: '本篇文章介绍了策略模式的概念并以文件上传为例，介绍了策略模式的编码实现。'
+layout: PostLayout
+bibliography: references-data.bib
+---
+## 问题描述
+
+例如，在一个拥有支付业务的系统中，需要支持多种支付方式。而各个支付方式的实现需要不同的第三方接口。
+
+如果不适用策略模式，则处理场景一般这样处理：
+
+```java
+public class PaymentService {
+
+    CreditService creditService;
+    WeChatService weChatService;
+    AlipayService alipayService;
+
+    public void payment(PaymentType paymentType, BigDecimal amount) {
+        if (PaymentType.Credit == paymentType) {
+            creditService.payment();
+        } else if (PaymentType.WECHAT == paymentType) {
+            weChatService.payment();
+        } else if (PaymentType.ALIPAY == paymentType) {
+            alipayService.payment();
+        } else {
+            throw new NotSupportPaymentException("paymentType not support");
+        }
+    }
+}
+
+enum PaymentType {
+    Credit, WECHAT, ALIPAY;
+}
+
+```
+
+很明显，当业务需求发生改变时，需要对本类进行修改，不符合开闭原则。
+
+总之就是太low了。
+
+## 策略模式定义
+
+> 策略设计模式是一种行为设计模式。当在处理一个业务时，有多种处理方式，并且需要再运行时决定使哪一种具体实现时，就会使用策略模式。
+
+一般情况下策略模式的使用包括以下步骤：
+
+1. 定义一个接口
+2. 定义接口的各个实现类
+3. 实现策略上下文调用策略接口
+
+## 策略模式实战
+
+下面以用户文件上传的为例，了解策略模式
+
+### OSS客户端创建Bucket
+
+[OSS控制台创建Bucket](https://help.aliyun.com/zh/oss/getting-started/console-quick-start)
+
+根据文档创建Bucket
+
+### 完善配置文件
+
+配置对象存储服务，以oss为例
+
+```
+<!-- oss-->
+<dependency>
+  <groupId>com.aliyun.oss</groupId>
+  <artifactId>aliyun-sdk-oss</artifactId>
+  <version>3.16.1</version>
+</dependency>
+```
+
+```yaml
+application:
+  store:
+    oss:
+      endpoint: *
+      bucket: *
+      domain-url: *
+      # 妥善保管
+      access-key: *
+      access-key-secret: *
+    local:
+      endpoint: null
+      bucket: null
+      domain-url: null
+      access-key: null
+      access-key-secret: null
+```
+
+> 可以使用@Value注解来获取配置
+> 
+> 在这里呢我们使用@ConfigurationProperties()的方式来获取配置文件的内容。
+
+首先引入自定义依赖和oss依赖
+
+```xml
+<!-- 自定义配置 -->
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-configuration-processor</artifactId>
+</dependency>
+```
+
+```xml
+<!--阿里云Oss对象存储-->
+<dependency>
+    <groupId>com.aliyun.oss</groupId>
+    <artifactId>aliyun-sdk-oss</artifactId>
+    <version>${oss.version}</version>
+</dependency> 
+```
+
+
+> 定义properties实体类，通过@ConfigurationProperties()注解读取配置。
+实体类中由于类继承关系不要使用@Data注解，而要使用@Getter和@Setter。
+除此之外还要注意配置目录的对应关系。
+
+```java
+@Getter
+@Setter
+@Component
+@ConfigurationProperties("application.store")// 与yml中对应
+public class ObjectStoreProperties {
+
+    /**
+     * Oss
+     */
+    private ConfigEntity oss;
+
+    /**
+     * local
+     */
+    private ConfigEntity local;
+
+    @Getter
+    @Setter
+    public static class ConfigEntity {
+
+        /**
+         * 访问域名
+         */
+        private String domainUrl;
+
+        /**
+         * key
+         */
+        private String accessKey;
+
+        /**
+         * 密钥
+         */
+        private String accessKeySecret;
+
+        /**
+         * 地域节点
+         */
+        private String endpoint;
+
+        /**
+         * 存储桶名称
+         */
+        private String bucket;
+
+    }
+}
+```
+
+### 定义上传接口
+
+> 新建一个名称为 strategy 的文件夹（在代码规范中，使用设计模式要明确的体现出来，便于后期维护）
+
+```java
+public interface UploadStrategy {
+
+    /**
+     * 上传文件
+     *
+     * @param file 文件
+     * @param filePath 文件上传路径
+     * @return 文件上传的全路径
+     */
+    String uploadFile(MultipartFile file, final String filePath);
+
+}
+```
+
+### 定义抽象实现
+
+在实现具体的接口前可以发现，无论使用哪种上传策略，都需要以下功能
+
+- 上传对象初始化
+- 文件是否已经存在
+- 文件上传
+- 获取访问路径
+
+所以需要定义一个抽象类来规定具体所需要使用的方法，然后各个具体实现来继承抽象类即可。
+
+```java
+@Getter
+@Setter
+public abstract class AbstractUploadStrategyImpl implements UploadStrategy {
+
+    @Override
+    public String uploadFile(MultipartFile file, String filePath) {
+        try {
+            //获取文件md5值 -> 获取文件后缀名 -> 生成相对路径
+            String fileMd5 = FileUtils.getMd5(file.getInputStream());
+            String extName = FileUtils.getExtName(file.getOriginalFilename());
+            String fileRelativePath = filePath + fileMd5 + extName;
+
+            //初始化
+            initClient();
+
+            //检测文件是否已经存在，不存在则进行上传操作
+            if (!checkFileIsExisted(fileRelativePath)) {
+                executeUpload(file, fileRelativePath);
+            }
+
+            return getPublicNetworkAccessUrl(fileRelativePath);
+        } catch (IOException e) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR,"上传失败");
+        }
+    }
+
+    /**
+     * 初始化客户端
+     */
+    public abstract void initClient();
+
+    /**
+     * 检查文件是否已经存在（文件MD5值唯一）
+     *
+     * @param fileRelativePath 文件相对路径
+     * @return true 已经存在  false 不存在
+     */
+    public abstract boolean checkFileIsExisted(String fileRelativePath);
+
+    /**
+     * 执行上传操作
+     *
+     * @param file             文件
+     * @param fileRelativePath 文件相对路径
+     * @throws IOException io异常信息
+     */
+    public abstract void executeUpload(MultipartFile file, String fileRelativePath) throws IOException;
+
+    /**
+     * 获取公网访问路径
+     *
+     * @param fileRelativePath 文件相对路径
+     * @return 公网访问绝对路径
+     */
+    public abstract String getPublicNetworkAccessUrl(String fileRelativePath);
+
+}
+
+```
+
+### oss上传策略实现
+
+```java
+@Slf4j
+@Getter
+@Setter
+@RequiredArgsConstructor
+@Service("ossUploadServiceImpl")
+public class OssUploadStrategyImpl extends AbstractUploadStrategyImpl {
+
+    /**
+     * 构造器注入bean
+     */
+    private final ObjectStoreProperties properties;
+
+    /**
+     * 当前类的属性
+     */
+    private OSS ossClient;
+
+
+    @Override
+    public void initClient() {
+        ossClient = new OSSClientBuilder().build(properties.getOss().getEndpoint(), properties.getOss().getAccessKey(), properties.getOss().getAccessKeySecret());
+        log.info("OssClient Init Success...");
+    }
+
+    @Override
+    public boolean checkFileIsExisted(String fileRelativePath) {
+        return ossClient.doesObjectExist(properties.getOss().getBucket(), fileRelativePath);
+    }
+
+    @Override
+    public void executeUpload(MultipartFile file, String fileRelativePath) throws IOException {
+        log.info("File Upload Starts...");
+        ossClient.putObject(properties.getOss().getBucket(), fileRelativePath, file.getInputStream());
+        log.info("File Upload Finish...");
+    }
+
+    @Override
+    public String getPublicNetworkAccessUrl(String fileRelativePath) {
+        return properties.getOss().getDomainUrl() + fileRelativePath;
+    }
+}
+```
+
+### 本地上传实现
+
+```java
+@Slf4j
+@Getter
+@Setter
+@RequiredArgsConstructor
+@Service("localUploadServiceImpl")
+public class LocalUploadStrategyImpl extends AbstractUploadStrategyImpl {
+
+    /**
+     * 本地项目端口
+     */
+    @Value("${server.port}")
+    private Integer port;
+
+    /**
+     * 前置路径 ip/域名
+     */
+    private String prefixUrl;
+
+    /**
+     * 构造器注入bean
+     */
+    private final ObjectStoreProperties properties;
+
+    @Override
+    public void initClient() {
+        try {
+            prefixUrl = ResourceUtils.getURL("classpath:").getPath() + "static/";
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR,"文件不存在");
+        }
+        log.info("LocalClient Init Success...");
+    }
+
+    @Override
+    public boolean checkFileIsExisted(String fileRelativePath) {
+        return new File(prefixUrl + fileRelativePath).exists();
+    }
+
+    @Override
+    public void executeUpload(MultipartFile file, String fileRelativePath) {
+        File dest = checkFolderIsExisted(fileRelativePath);
+        try {
+            file.transferTo(dest);
+        } catch (IOException e) {
+            e.printStackTrace();
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR,"文件上传失败");
+        }
+    }
+
+    @Override
+    public String getPublicNetworkAccessUrl(String fileRelativePath) {
+        try {
+            String host = InetAddress.getLocalHost().getHostAddress();
+            if (StringUtils.isEmpty(properties.getLocal().getDomainUrl())) {
+                return String.format("http://%s:%d%s", host, port, fileRelativePath);
+            }
+            return properties.getLocal().getDomainUrl() + fileRelativePath;
+        } catch (UnknownHostException e) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR);
+        }
+    }
+
+    /**
+     * 检查文件夹是否存在，若不存在则创建文件夹，最终返回上传文件
+     *
+     * @param fileRelativePath 文件相对路径
+     * @return {@link  File} 文件
+     */
+    private File checkFolderIsExisted(String fileRelativePath) {
+        File rootPath = new File(prefixUrl + fileRelativePath);
+        if (!rootPath.exists()) {
+            if (!rootPath.mkdirs()) {
+                throw new BusinessException(ErrorCode.SYSTEM_ERROR,"文件夹创建失败");
+            }
+        }
+        return rootPath;
+    }
+
+}
+```
+
+### 上传策略枚举类
+
+```java
+@Getter
+@AllArgsConstructor
+public enum UploadStrategyEnum {
+
+    /**
+     * 上传策略枚举
+     */
+    LOCAL("localUploadServiceImpl", "本地上传"),
+    OSS("ossUploadServiceImpl", "OSS上传");
+
+
+    /**
+     * 上传服务实现类名称
+     */
+    private final String uploadServiceName;
+
+    /**
+     * 信息
+     */
+    private final String message;
+}
+```
+
+### 策略上下文实现
+
+- 当Map集合的Value为接口类型时，Spring会自动对Map集合进行注入。
+- 其中map集合的key为接口对应实现类的BeanName
+- 其中map集合的value为接口对应实现类的实例
+
+```java
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class UploadStrategyContext {
+
+    /**
+     * 当Map集合的Value为接口类型时，Spring会自动对Map集合进行注入。
+     * 其中map集合的key为接口对应实现类的BeanName
+     * 其中map集合的value为接口对应实现类的实例
+     */
+    private final Map<String, UploadStrategy> uploadStrategyMap;
+
+    /**
+     * 执行上传策略
+     * @param file 文件
+     * @param filePath 文件上传路径前缀
+     * @return 文件上传全路径
+     */
+    public String executeUploadStrategy(MultipartFile file, final String filePath, UploadStrategyEnum uploadStrategyEnum) {
+        if(!uploadStrategyMap.containsKey(uploadStrategyEnum.getUploadServiceName())){
+            log.error("没有对应的策略，无法进行上传");
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR,"没有对应的策略，无法进行上传");
+        }
+        return uploadStrategyMap.get(uploadStrategyEnum.getUploadServiceName()).uploadFile(file, filePath);
+    }
+}
+```
+
+### 上传测试
+
+```java
+@RestController
+public class UploadController {
+
+    @Resource
+    private UploadStrategyContext uploadStrategyContext;
+
+    @PostMapping("/upload")
+    public Result<AccessUrlDTO> upload(MultipartFile file) {
+        // 本地上传就使用UploadStrategyEnum.LOCAL
+        // OSS上传就使用UploadStrategyEnum.OSS
+        String url = uploadStrategyContext.executeUploadStrategy(file,"attachment/", UploadStrategyEnum.LOCAL);
+        AccessUrlDTO accessUrl = AccessUrlDTO.builder().url(url).build();
+        return Result.success(accessUrl);
+    }
+}
+```
+
+也可以在配置文件中设置文件上传方式
+
+```yaml
+file:
+  upload:
+    storage: LOCAL
+```
+
+```java
+@Value("${file.upload.storage}")
+private String storage;
+
+UploadStrategyEnum uploadStrategyEnum = UploadStrategyEnum.valueOf(storage);
+String url = uploadStrategyContext.executeUploadStrategy(file,"attachment/", uploadStrategyEnum);
+```
+
+这样，通过策略模式实现了文件的上传，后续再使用其他的对象存储平台也更加方便。
+
+## 小结
+
+本篇文章介绍了策略模式的概念并以文件上传为例，介绍了策略模式的编码实现。
+
+希望本文对你有帮助，感谢你的阅读。

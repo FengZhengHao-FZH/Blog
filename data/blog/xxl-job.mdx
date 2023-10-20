@@ -1,0 +1,268 @@
+---
+title: '轻量级分布式任务调度平台XXL-JOB的使用'
+date: 2023-07-20T15:20:55Z
+tags: ['xxl-job']
+summary: '本文主要介绍了传统Spring定时任务的不足和分布式任务调度平台XXL-JOB的使用。'
+layout: PostLayout
+bibliography: references-data.bib
+---
+
+## 问题描述
+
+在实际的项目开发过程中，可能会有定时任务的使用场景，如：定时备份数据，订单超时自动取消，按时间段统计信息，优惠券要过期给用户发送一个提醒等等。
+
+使用Spring的定时任务的框架代码可能如下
+
+```java
+@Slf4j
+@Component //使spring管理
+@EnableScheduling //定时任务注解
+public class Timer {
+    @Autowired
+    IPayRecordService iPayRecordService;
+    @Scheduled(cron = "0/10 * * * * ?")
+    public void notifyOrder(){
+        log.info("timer notifyOrder ....");
+        try {
+            iPayRecordService.notifyOrder();
+        }catch (Exception e){
+            log.error("notifyOrder error:",e);
+        }
+    }
+}
+```
+
+使用Spring的定时任务的框架的问题
+
+- 不支持集群部署：比如你启动三个实例，每个实例都会去触发执行器去执行“优惠券要过期给用户发送一个提醒”这个任务，这时候就产生了重复执行的问题。 通常是单机部署的，单机就存在挂掉的风险。
+- 不支持失败重试：出现异常后任务终结，不能根据执行状态，控制任务重新执行
+- 不支持动态管理：不支持不重启任务情况下，关闭和启动任务，修改cron表达式等。
+- 无报警：任务失败后不能发送报警通知
+- 不支持分片任务
+
+## XXL-JOB是什么
+
+[官方文档](https://www.xuxueli.com/xxl-job/)
+
+xxl-job是一个将调度行为抽象形成“调度中心”公共平台，而平台自身并不承担业务逻辑，“调度中心”负责发起调度请求。 将任务抽象成分散的JobHandler，交由“执行器”统一管理，“执行器”负责接收调度请求并执行对应的JobHandler中业务逻辑。因此，“调度”和“任务”两部分可以相互解耦，提高系统整体稳定性和扩展性；
+
+## 项目搭建
+
+### 部署XXL-JOB调度中心
+
+下载地址：[gitee](https://gitee.com/xuxueli0323/xxl-job) 和 [github](https://github.com/xuxueli/xxl-job)。
+
+执行doc/db/tables_xxl_job.sql，更改admin子项目application.properties中数据库配置，启动XxlJobApplication
+
+访问项目路径/xxl-job-admin，默认账号密码为admin/123456
+
+### 部署XXL-JOB执行器
+
+新建项目，引入xxl-job核心依赖
+
+```xml
+<!-- xxl-job-core -->
+<dependency>
+  <groupId>com.xuxueli</groupId>
+  <artifactId>xxl-job-core</artifactId>
+  <version>${project.parent.version}</version>
+</dependency>
+```
+
+添加配置
+
+```yaml
+xxl:
+  job:
+    accessToken: 'default_token'
+    admin:
+      addresses: http://127.0.0.1:9077/xxl-job-admin
+    executor:
+      address: ''
+      appname: handler
+      ip: ''
+      logpath: /data/applogs/xxl-job/jobhandler
+      logretentiondays: 30
+      port: 6666
+```
+
+添加config配置类
+
+```
+@Configuration
+public class XxlJobConfig {
+    private Logger logger = LoggerFactory.getLogger(XxlJobConfig.class);
+    
+    @Value("${xxl.job.admin.addresses}")
+    private String adminAddresses;
+    @Value("${xxl.job.accessToken}")
+    private String accessToken;
+    @Value("${xxl.job.executor.appname}")
+    private String appname;
+    @Value("${xxl.job.executor.address}")
+    private String address;
+    @Value("${xxl.job.executor.ip}")
+    private String ip;
+    @Value("${xxl.job.executor.port}")
+    private int port;
+    @Value("${xxl.job.executor.logpath}")
+    private String logPath;
+    @Value("${xxl.job.executor.logretentiondays}")
+    private int logRetentionDays;
+
+    @Bean
+    public XxlJobSpringExecutor xxlJobExecutor() {
+        logger.info(">>>>>>>>>>> xxl-job config init.");
+        XxlJobSpringExecutor xxlJobSpringExecutor = new XxlJobSpringExecutor();
+        xxlJobSpringExecutor.setAdminAddresses(adminAddresses);
+        xxlJobSpringExecutor.setAppname(appname);
+        xxlJobSpringExecutor.setAddress(address);
+        xxlJobSpringExecutor.setIp(ip);
+        xxlJobSpringExecutor.setPort(port);
+        xxlJobSpringExecutor.setAccessToken(accessToken);
+        xxlJobSpringExecutor.setLogPath(logPath);
+        xxlJobSpringExecutor.setLogRetentionDays(logRetentionDays);
+
+        return xxlJobSpringExecutor;
+    }
+}
+```
+
+启动执行器，可以在管理界面发现管理系统已经识别到了这个执行器
+
+### 使用模式
+
+**Bean模式(类形式)**
+
+1. 开发一个继承自"com.xxl.job.core.handler.IJobHandler"的JobHandler类，实现其中任务方法。
+2. 手动通过如下方式注入到执行器容器。
+
+```java
+// 写在上文的config中
+XxlJobExecutor.registJobHandler("demoJobHandler", new DemoJobHandler());
+```
+
+优点：
+
+- 不限制项目环境，兼容性好。即使是无框架项目，如main方法直接启动的项目也可以提供支持。
+缺点：
+
+- 每个任务需要占用一个Java类，造成类的浪费；
+- 不支持自动扫描任务并注入到执行器容器，**需要手动注入**。
+
+**Bean模式(方法）**
+
+```java
+@XxlJob("demoJobHandler")
+public void demoJobHandler() throws Exception {
+    XxlJobHelper.log("XXL-JOB, Hello World.");
+}
+```
+
+@XxlJob(value=“自定义jobhandler名称”, init = “JobHandler初始化方法”, destroy =  “JobHandler销毁方法”)
+
+默认任务结果为 "成功" 状态，不需要主动设置；如有诉求，比如设置任务结果为失败，可以通过 "XxlJobHelper.handleFail/handleSuccess" 自主设置任务结果
+
+在web界面对新建的任务进行参数配置，运行模式选中 “BEAN模式”，JobHandler属性填写任务注解“@XxlJob”中定义的值即可
+
+优点：
+
+- 每个任务只需要开发一个方法，并**添加”@XxlJob”注解即可**，更加方便、快速。支持自动扫描任务并注入到执行器容器。
+
+缺点：
+
+- 要求Spring容器环境；
+
+**Glue模式(Java)**
+
+其实是内置了一个GLUE编辑器开发界面，写入上述Bean模式(类形式)的代码，后续一致。
+
+## 使用示例
+
+假设，有一进销存管理系统现在需要在每天的23:00:00统计对应各种订单进行入库和出库统计
+
+```
+@Component
+public class OrderStatisticsJob {
+
+    @Resource
+    private OrderService orderService;
+    @Resource
+    private OrderStatisticsService orderStatisticsService;
+    @Resource
+    private SnowflakeIdWorker snowflakeIdWorker;
+
+
+    @XxlJob("orderStatisticsJobHandler")
+    @Transactional(rollbackFor = Exception.class)
+    public void testJobHandler() throws Exception {
+        XxlJobHelper.log("start statistics job...");
+
+        // 1，根据订单类型不同查找出三种订单
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMdd HH:mm:ss");
+        String startTime = LocalDateTime.now().minusDays(1).format(formatter);
+        String endTime = LocalDateTime.now().format(formatter);
+
+        List<Order> mechineOrderList = orderService.lambdaQuery()
+                .eq(Order::getOrderKind, OrderKindEnum.MECHINE.getCode())
+                .lt(Order::getOrderInTime, endTime)
+                .ge(Order::getOrderInTime, startTime)
+                .list();
+
+        List<Order> batteryOrderList = orderService.lambdaQuery()
+                .eq(Order::getOrderKind, OrderKindEnum.BATTERY.getCode())
+                .lt(Order::getOrderOutTime, endTime)
+                .ge(Order::getOrderOutTime, startTime)
+                .list();
+
+        List<Order> meterielOrderList = orderService.lambdaQuery()
+                .eq(Order::getOrderKind, OrderKindEnum.MATERIEL.getCode())
+                .lt(Order::getOrderOutTime, endTime)
+                .ge(Order::getOrderOutTime, startTime)
+                .list();
+
+        // 2，分别统计其总入库和出库数量
+        // 将每一个order类的入库数量相加，出库数量也相加，返回两个数，标识总入库数量和总出库数量
+        Integer totalInCountMechine = mechineOrderList.stream().mapToInt(Order::getOrderInCount).sum();
+        Integer totalOutCountMechine = mechineOrderList.stream().mapToInt(Order::getOrderOutCount).sum();
+        Integer totalInCountBattery = batteryOrderList.stream().mapToInt(Order::getOrderInCount).sum();
+        Integer totalOutCountBattery = batteryOrderList.stream().mapToInt(Order::getOrderOutCount).sum();
+        Integer totalInCountMeteriel = meterielOrderList.stream().mapToInt(Order::getOrderInCount).sum();
+        Integer totalOutCountMeteriel = meterielOrderList.stream().mapToInt(Order::getOrderOutCount).sum();
+      
+        // 3，写入统计数据到统计表中
+        OrderStatistics mechineOrderStatistics = new OrderStatistics();
+        // 设置属性
+
+        OrderStatistics batteryOrderStatistics = new OrderStatistics();
+        // 设置属性
+
+        OrderStatistics meterielOrderStatistics = new OrderStatistics();
+        // 设置属性
+
+        orderStatisticsService.save(mechineOrderStatistics);
+        orderStatisticsService.save(batteryOrderStatistics);
+        orderStatisticsService.save(meterielOrderStatistics);
+
+        XxlJobHelper.log("end statistics job...");
+    }
+}
+```
+
+然后在XXL-JOB的管理界面，选择执行器，运行模式选择Bean，JobHandler选择orderStatisticsJobHandler，调度类型选择CORN，填入
+
+```
+0 0 23 * * ? 
+```
+
+## CORN表达式
+
+此处无需学习，参考[在线Corn](https://cron.qqe2.com/)
+
+也可以使用[自然语言生成Corn](https://gitee.com/huoyo/nlp2cron)
+
+## 小结
+
+使用xxl-job来发布定时任务是相对简单的，启动admin项目，在执行器项目中进行配置，使用@JobHanlder注解开发执行类，最后在web界面进行配置，启动该任务即可。
+
+希望对你有帮助，感谢你的阅读。

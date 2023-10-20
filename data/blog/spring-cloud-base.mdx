@@ -1,0 +1,345 @@
+---
+title: 'SpringCloud：微服务系统的完整解决方案'
+date: 2023-08-11T18:22:54Z
+tags: ['spring cloud','gateway','nacos']
+summary: '本文主要介绍不同系统架构的优缺点，并以Spring Cloud 框架，Nacos作为数据源，Gateway作为网关，展示了Spring Cloud 的各项基本功能。'
+layout: PostLayout
+bibliography: references-data.bib
+---
+
+## 系统的架构设计
+
+###  单体式架构
+
+将业务的所有功能集中在一个项目中开发，打包成一个包部署。
+
+优点：架构简单、部署成本低
+
+缺点：耦合度高（维护困难、升级困难）
+
+### 分布式架构
+
+根据业务功能对系统做拆分，每一个业务功能模块单独作为独立项目开发，成为一个服务。
+
+优点：降低服务耦合、有利于服务升级和拓展
+
+缺点：服务调用关系错综复杂
+
+问题：
+
+- 服务拆分的粒度如何界定？
+- 服务之间如何调用？
+- 服务的调用关系如何管理？
+
+### 微服务架构
+
+微服务的架构特征
+
+- 单一职责：微服务拆分粒度更小，每一个服务都对应唯一的业务能力，做到单一职责。
+- 自治：团队独立、技术独立、数据独立、独立部署和交付
+- 面向服务：服务提供统一标准的接口，与语言和技术无关
+- 隔离性强：服务调用做好隔离、容错、降级，避免出现级联问题
+
+微服务的上述特性其实是在给分布式架构定制一个标准，进一步降低服务之间的耦合度，提供服务的独立性和灵活性。做到高内聚，低耦合。因此，我们可以认为**微服务是一种经过良好架构设计的分布式架构方案**。
+
+### SpringCloud
+
+Spring Cloud 基于 Spring Boot，为微服务体系开发中的架构问题，提供了一整套的解决方案——服务注册与发现，服务消费，服务保护与熔断，网关，分布式调用追踪，分布式配置管理等。
+
+## 实战
+
+### 项目搭建
+
+![系统架构](/static/images/blog/spring-cloud-base/architecture-diagram.png)
+
+创建Maven父项目parent，用作版本管理。
+
+简单创建两个子项目custom，product，均添加nacos-discovery 和 openfeign 依赖，将对应SpringBoot的依赖上移到cs-parent，并进行统一依赖版本管理。
+
+父项目pom如下，注意SpringBoot 与 SpringCloud，SpringCloud Alibaba的版本关系。
+
+```xml
+<parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>2.3.2.RELEASE</version>
+</parent>
+    
+<dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-dependencies</artifactId>
+            <version>Hoxton.SR9</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-alibaba-dependencies</artifactId>
+            <version>2.2.6.RELEASE</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
+
+<dependencies>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter</artifactId>
+    </dependency>
+
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-test</artifactId>
+        <scope>test</scope>
+    </dependency>
+</dependencies>
+```
+
+### Nacos 服务发现与注册中心
+
+#### Nacos的安装与启动
+
+[Nacos快速开始文档](https://nacos.io/zh-cn/docs/quick-start.html)
+
+从上述链接中下载nacos，mysql新建库：nacos，字符集：utf8 ，排序规则：utf8_general_ci，执行config目录下的nacos-mysql.sql。
+
+修改application.properties内容。
+
+```properties
+#*************** Config Module Related Configurations ***************#
+### If use MySQL as datasource:
+ spring.datasource.platform=mysql
+ 
+### Count of DB:
+ db.num=1
+ 
+### Connect URL of DB:
+ db.url.0=jdbc:mysql://127.0.0.1:3306/nacos?characterEncoding=utf8&connectTimeout=1000&socketTimeout=3000&autoReconnect=true&useUnicode=true&useSSL=false&serverTimezone=UTC
+## 账号
+ db.user.0=root
+## 密码
+ db.password.0=123456
+```
+
+测试则修改bin目录下的startup.cmd，将启动模式更改为单机
+
+```properties
+set MODE="standalone"
+```
+
+启动startup.md，打开localhost:8848即可打开nacos管理界面，默认账户密码均为nacos。
+
+####  服务发现
+
+在提供方和消费方resource目录下新建bootstrap.yml，添加如下内容。
+
+```yaml
+spring:
+  application:
+    # 提供方 应用名
+    name: product
+    # 消费方 应用名
+    name: custom
+
+  cloud:
+    nacos:
+      discovery:
+        enabled: true
+        service: ${spring.application.name}
+        # 使用默认账号密码
+        username: nacos
+        password: nacos
+      config:
+        enabled: true
+        encode: UTF-8
+        file-extension: yaml
+```
+
+在Spring Cloud中使用nacos作为服务注册和配置中心时，默认的nacos地址是localhost:8848。如果没有显式地配置server-addr属性，nacos客户端将尝试连接到该默认地址。如果需要连接到其他的nacos，配置server-addr即可。
+
+启动项目，即可在nacos管理界面服务管理界面发现已经发现这两个项目。
+
+#### 配置中心的使用
+
+在nacos配置管理分区内，新建一个dev.yml，注意，文件名即为对应的服务，例如product-dev.yml，对应product项目简单修改项目的启动端口。
+
+```yaml
+server:
+  port: 9077
+```
+
+指定项目的配置文件为dev。
+
+```yaml
+spring:
+  profiles:
+    active: dev
+```
+
+重新启动发现项目运行在9077端口上，说明通过nacos创建的dev.yml生效。
+
+### Feign的调用
+
+#### 简单调用
+
+[OpenFeign简易使用示例](https://juejin.cn/post/7078092858669924389#heading-0)
+
+```java
+// 提供方
+// 接口
+@RequestMapping("/hello")
+public String hello() {
+    return "Hello";
+}
+// 配置文件
+server:
+    port:8089
+    servlet:
+    context-path: /product
+    
+// 消费方
+// feign接口
+@FeignClient(name = "product")
+public interface HelloFeign {
+    @GetMapping("/product/hello")
+    String hello();
+}
+    
+@RestController
+public class HelloController {
+    @Resource
+    private HelloFeign helloFeign;
+      
+    @GetMapping("/hello")
+    public String hello(){
+        return "hello,this is custom" + helloFeign.hello() ;
+    }
+}
+    
+server:
+    port:8088
+    servlet:
+      context-path: /custom
+```
+
+启动product和custom项目，访问localhost:8088/hello，可以发现在custom内部请求了product的hello接口
+
+#### 常规多模块Maven项目
+
+```java
+@FeignClient(
+name = "${product-name}", // nacos项目名称
+path = "${product-path}", // 项目路径
+contextId = "IApiNameApi") // 唯一标识
+```
+
+常规多模块微服务项目中，服务提供方中一般会有Api子项目，使用如上注解标注Api接口，Web子项目中Controller层各类实现Api。
+
+而服务消费方一般依赖服务提供方的Api，注意，此依赖为服务提供方Maven打包到本地得到。
+
+product-name，product-path，若写死在代码中则可直接依赖；如果如上所示，则需要在yml中自定义属性与服务提供方项目相同的名称。
+
+此时，启动类上@EnableFeignClients需要注明basepackage为上述Api子包。
+
+例如，如果服务提供方依赖如下：
+
+```
+<dependency>
+  <groupId>com.edu.cloud.center.api</groupId>
+  <artifactId>edu-cloud-center-api</artifactId>
+  <version>1.0-SNAPSHOT</version>
+</dependency>
+```
+
+则@EnableFeignClients(basePackages = {"com.edu.cloud.center.api"})
+
+先启动nacos，然后启动两个项目，调用服务消费方的hello接口，发现同时调用了服务系统方的hello接口。
+
+### OpenFeign 核心原理
+
+#### 什么是Feign
+
+Feign 是声明式 Web 服务客户端，它使编写 Web 服务客户端更加容易。
+
+Feign 不做任何请求处理，通过处理注解相关信息生成 Request，并对调用返回的数据进行解码，从而实现 **简化 HTTP API 的开发**。
+
+![feign-theory](/static/images/blog/spring-cloud-base/feign-theory.png)
+
+#### OpenFeign 原理
+
+[深入理解OpenFeign原理](https://juejin.cn/post/7114293942014869540#heading-4)
+
+1，包扫描
+
+@EnableFeignClients 注解，针对basePackage进行扫描，扫描带有@FeignClients注解的类和接口，然后进行判断，只保留接口。
+
+2，解析FeignClient的属性
+
+解析该有 @FeignClient注解的接口，解析每个接口的每个方法其中定义的属性，比如远程接口的 URL、接口类型（Get、Post 等）、各个请求参数等。
+
+3，为每个FeignClient的方法创建方法级别代理对象
+
+为每一个方法生成一个对应的 MethodHandler 类作为方法级别的代理，并将这些类存放到一个 HashMap 中；然后生成一个 InvocationHandler 用来管理这个 hashMap；接着使用 Java 的 JDK 原生的动态代理对象，并添加到 Spring 容器中。
+
+4，方法调用
+
+根据方法名从3步骤的HashMap中找到对应的MethodHandler，生成请求Request，进行调用即可。
+
+5，负载均衡
+
+用 Ribbon 的负载均衡算法选择一个 合适的server实例，拼接生成最后的服务地址，将请求打在该server上。
+
+6，返回结果处理
+
+通过解码器生成 Response 返回客户端，将信息流解析成为接口返回数据。
+
+### GateWay的搭建与使用
+
+parant父项目中新建子项目gateway，添加gateway依赖。
+
+```java
+<dependency>
+  <groupId>org.springframework.cloud</groupId>
+  <artifactId>spring-cloud-starter-gateway</artifactId>
+</dependency>
+```
+
+配置application.yml
+
+```yaml
+server:
+  port: 8090
+spring:
+  application:
+    name: gateway
+  cloud:
+    gateway:
+      default-filters:
+        - AddRequestHeader=gateway-env, springcloud-gateway
+      routes:
+        - id: baidu
+          uri: https://www.baidu.com
+          predicates:
+            - Path=/
+        - id: custom
+          uri: http://localhost:8088
+          predicates:
+            - Path=/custom/**
+        - id: product
+          uri: http://localhost:8089
+          predicates:
+            - Path=/product/**
+```
+
+使用路由匹配机制，如果是访问根路径，则转发到百度；如何路径符合/custom/**，则转发到8088端口；/product同理。
+
+调试localhost:8090/product/hello和localhost:8090/custom/hello，发现请求分别被转发到了8089和8088端口上。
+
+## 小结
+
+经过上文的配置和测试，展示了如何使用Nacos作为数据源实现服务的注册和配置，并用OpenFeign实现微服务之间的相互访问，接着使用Gateway作为网关进行路由的转发，展示了Spring Cloud 的基本功能。
+
+希望对你有帮助，感谢你的阅读。
