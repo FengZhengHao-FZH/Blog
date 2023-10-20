@@ -16,7 +16,7 @@ export default function Home({ posts }) {
         <div className="w-full">
           <Bleed>
             <div className="aspect-[2/1] w-full relative">
-              <Image src={siteMetadata.hero} fill className="object-cover" alt={} />
+              <Image src={siteMetadata.hero} alt={siteMetadata.hero} fill className="object-cover"  />
             </div>
           </Bleed>
         </div>
