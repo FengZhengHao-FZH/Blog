@@ -189,8 +189,6 @@ public class OrderStatisticsJob {
     private OrderService orderService;
     @Resource
     private OrderStatisticsService orderStatisticsService;
-    @Resource
-    private SnowflakeIdWorker snowflakeIdWorker;
 
 
     @XxlJob("orderStatisticsJobHandler")
@@ -222,7 +220,7 @@ public class OrderStatisticsJob {
                 .list();
 
         // 2，分别统计其总入库和出库数量
-        // 将每一个order类的入库数量相加，出库数量也相加，返回两个数，标识总入库数量和总出库数量
+        // 标识总入库数量和总出库数量
         Integer totalInCountMechine = mechineOrderList.stream().mapToInt(Order::getOrderInCount).sum();
         Integer totalOutCountMechine = mechineOrderList.stream().mapToInt(Order::getOrderOutCount).sum();
         Integer totalInCountBattery = batteryOrderList.stream().mapToInt(Order::getOrderInCount).sum();
@@ -254,6 +252,10 @@ public class OrderStatisticsJob {
 ```
 0 0 23 * * ? 
 ```
+
+点击执行一次，即可在数据库中发现，相应的数据以已经被插入。
+
+然后将该定时任务设置为开启即可。
 
 ## CORN表达式
 

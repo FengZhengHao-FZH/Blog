@@ -6,5 +6,6 @@
   "nacos": 2,
   "spring cloud":1,
   "xxl-job": 1,
-  "事务": 1
+  "事务": 1,
+  "mybatis-plus": 1
 }

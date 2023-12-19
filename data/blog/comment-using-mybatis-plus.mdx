@@ -1,0 +1,434 @@
+---
+title: '使用MyBatis-Plus实现多级评论功能'
+date: 2023-12-18T14:25:35Z
+tags: ['mybatis-plus']
+summary: '本文主要介绍了使用Mybatis-Plus作为ORM框架，定义个性化查询SQL实现多级评论的分页查询。'
+layout: PostLayout
+bibliography: references-data.bib
+---
+
+## 预期效果
+
+在一般的社交平台上，评论的功能是必不可少的，它们一般是这样子呈现的：
+
+![顶级评论](/static/images/blog/comment-using-mybatis-plus/top-comment.jpg)
+
+当点击查看子评论后会这样展示：
+
+![子评论](/static/images/blog/comment-using-mybatis-plus/child-comment.jpg)
+
+## 需求分析
+
+想要达到预期效果，至少需要实现以下功能：
+
+1. 顶级评论需要支持分页
+2. 顶级评论需要支持按照时间或热度查询
+3. 顶级评论需要显示一共有几条子评论
+4. 子评论需要支持分页
+5. 所有评论都需要记录其回复的是哪个用户
+
+这里不实现子评论的按照时间或热度查询
+
+## 数据库设计
+
+根据上述需求，评论表至少需要如下字段：
+
+![评论表](/static/images/blog/comment-using-mybatis-plus/comment-mysql.png)
+
+root_id字段记录根评论id，顶级评论则为空，从而更方便的查询其子评论。
+
+reply_id字段记录父评论id，顶级评论则为空，从而方便查询其回复了哪个用户。
+
+> 问：为什么不直接记录回复的用户id？
+> 
+> 答：这样做可以更方便的实现一些后续功能，例如引用功能，查看对话功能等。
+
+用户表则常规一点，包含id，昵称，头像等字段即可。
+
+## 编码实现
+
+### 返回类设计
+
+```java
+@Data
+@EqualsAndHashCode(callSuper = false)
+@Accessors(chain = true)
+public class CommentInfo {
+
+    /**
+     * 评论id
+     */
+    private Long id;
+
+    /**
+     * 博客id
+     */
+    private Long postId;
+
+    /**
+     * 根评论id
+     */
+    private Long rootId;
+
+    /**
+     * 父评论id
+     */
+    private Long replyId;
+
+    /**
+     * 点赞数
+     */
+    private Integer liked;
+
+    /**
+     * 评论内容
+     */
+    private String content;
+
+    /**
+     * 评论时间
+     */
+    private LocalDateTime createTime;
+
+    /**
+     * 评论用户
+     */
+    private UserInfo commentUser;
+
+    /**
+     * 被回复用户
+     */
+    private UserInfo replyUser;
+
+    /**
+     * 子评论
+     */
+    private List<CommentInfo> replyComments;
+
+    /**
+     * 子评论数量
+     */
+    private Integer replyCount;
+}
+```
+
+其中UserInfo类记录用户基础信息，id，昵称，头像等，replyComments字段记录子评论。
+
+### Mapper定义
+
+```java
+@Mapper
+public interface CommentMapper extends BaseMapper<Comment> {
+
+    /**
+     * 根据博客id分页查询评论
+     * @param page 分页
+     * @param postId 博客id
+     * @param sortField 排序字段
+     * @return 评论
+     */
+
+    IPage<CommentInfo> pageTopComments(IPage<?> page, @Param("postId") Long postId, @Param("sortField") String sortField);
+
+    /**
+     * 根据rootId分页查询子评论
+     * @param page 分页
+     * @param rootId 根评论id
+     * @return 子评论
+     */
+    IPage<CommentInfo> pageChildComments(IPage<?> page, @Param("rootId") Long rootId);
+}
+```
+
+这里使用MyBatis-plus的自定义SQL的分页方式，在参数中加入IPage并且返回IPage，从而支持分页。
+
+### XML实现 
+
+```xml
+<resultMap id="topComment" type="com.example.model.response.comment.CommentInfo">
+        <id property="id" column="id"/>
+        <result property="content" column="content"/>
+        <result property="createTime" column="create_time"/>
+        <result property="postId" column="post_id" />
+        <result property="liked" column="liked" />
+
+        <association property="commentUser" javaType="com.example.model.response.user.UserInfo">
+            <id property="id" column="user_id"/>
+            <result property="avatar" column="avatar" />
+            <result property="name" column="name" />
+        </association>
+
+        <association property="replyComments" select="getChildComments" column="rootId=id"/>
+        <association property="replyCount" select="getChildCount" column="rootId=id"/>
+
+    </resultMap>
+
+    <resultMap id="childComment" type="com.example.model.response.comment.CommentInfo">
+        <id property="id" column="id"/>
+        <result property="content" column="content"/>
+        <result property="createTime" column="create_time"/>
+        <result property="postId" column="post_id"/>
+        <result property="replyId" column="reply_id"/>
+        <result property="liked" column="liked"/>
+
+        <association property="commentUser" javaType="com.example.model.response.user.UserInfo">
+            <id property="id" column="c_user_id"/>
+            <result property="avatar" column="u_avatar" />
+            <result property="name" column="u_name" />
+        </association>
+        <association property="replyUser" javaType="com.example.model.response.user.UserInfo">
+            <id property="id" column="pc_user_id"/>
+            <result property="avatar" column="pu_avatar" />
+            <result property="name" column="pu_name" />
+        </association>
+
+    </resultMap>
+
+    <select id="pageTopComments" resultMap="topComment">
+        select c.id,
+               c.content,
+               c.create_time,
+               c.post_id,
+               c.liked,
+               c.user_id,
+               u.avatar,
+               u.name
+        from comment as c
+                 join user as u on u.id = c.user_id
+        where c.post_id = #{postId}
+          and c.reply_id is null
+          and c.root_id is null
+          and c.deleted = 0
+        order by ${sortField} desc
+    </select>
+
+    <select id="getChildComments" resultMap="childComment">
+        select c.id,
+               c.content,
+               c.create_time,
+               c.post_id,
+               c.root_id,
+               c.reply_id,
+               c.liked,
+               c.user_id  c_user_id,
+               u.name     u_name,
+               u.avatar   u_avatar,
+               pc.user_id pc_user_id,
+               pu.name    pu_name,
+               pu.avatar  pu_avatar
+        from comment as c
+                 join comment as pc on pc.id = c.reply_id
+                 join user as u on u.id = c.user_id
+                 join user as pu on pc.user_id = pu.id
+        where c.root_id = #{rootId}
+          and c.deleted = 0
+        order by c.create_time
+        limit 3
+    </select>
+
+    <select id="getChildCount" resultType="integer">
+        select count(*)
+        from comment as c
+        where root_id = #{rootId}
+          and c.deleted = 0
+    </select>
+
+    <select id="pageChildComments" resultMap="childComment">
+        select c.id,
+               c.content,
+               c.create_time,
+               c.post_id,
+               c.root_id,
+               c.reply_id,
+               c.liked,
+               c.user_id  c_user_id,
+               u.name     u_name,
+               u.avatar   u_avatar,
+               pc.user_id pc_user_id,
+               pu.name    pu_name,
+               pu.avatar  pu_avatar
+        from comment as c
+                 join comment as pc on pc.id = c.reply_id
+                 join user as u on u.id = c.user_id
+                 join user as pu on pc.user_id = pu.id
+        where c.root_id = #{rootId}
+          and c.deleted = 0
+        order by c.create_time
+    </select>
+```
+
+XML中定义了两个resultMap，分别对应顶级评论和子评论，在其中使用association标签去关联其他查询内容。
+
+这里多次join了user表，可以使用子查询来获取所需的数据。
+
+## 测试及结果
+
+测试代码如下：
+
+```java
+@SpringBootTest
+class SuperFanApplicationTests {
+
+    @Resource
+    private CommentMapper commentMapper;
+
+
+    @Test
+    void testGetTopCommentList() {
+        IPage<CommentInfo> page = commentMapper.pageTopComments(new Page<>(1,10),1726508124156407896L, "create_time");
+        Json.prettyPrint(page);
+    }
+
+    @Test
+    void testGetChildCommentList() {
+        IPage<CommentInfo> page = commentMapper.pageChildComments(new Page<>(1,10),1735143555490471938L);
+        Json.prettyPrint(page);
+    }
+}
+
+```
+
+testGetTopCommentList结果：
+
+```json
+{
+  "records": [
+    {
+      "id": 1735505796957999000,
+      "postId": 1726508124156407800,
+      "liked": 0,
+      "content": "我是顶级评论",
+      "createTime": "2023-12-15T11:43:21",
+      "commentUser": {
+        "id": 1726508124156410400,
+        "name": "Test",
+        "avatar": "https://picsum.photos/id/640/200/200"
+      },
+      "replyComments": [],
+      "replyCount": 0
+    },
+    {
+      "id": 1735143555490472000,
+      "postId": 1726508124156407800,
+      "liked": 1,
+      "content": "我是顶级评论",
+      "createTime": "2023-12-14T11:43:56",
+      "commentUser": {
+        "id": 1726508124156404000,
+        "name": "Creator",
+        "avatar": "https://picsum.photos/id/640/200/200"
+      },
+      "replyComments": [
+        {
+          "id": 1735190139490119700,
+          "postId": 1726508124156407800,
+          "replyId": 1735143555490472000,
+          "liked": 0,
+          "content": "我是子评论",
+          "createTime": "2023-12-14T14:49:02",
+          "commentUser": {
+            "id": 1726508124156410400,
+            "name": "Test",
+            "avatar": "https://picsum.photos/id/640/200/200"
+          },
+          "replyUser": {
+            "id": 1726508124156404000,
+            "name": "Creator",
+            "avatar": "https://picsum.photos/id/640/200/200"
+          }
+        },
+        {
+          "id": 1735491998914306000,
+          "postId": 1726508124156407800,
+          "replyId": 1735190139490119700,
+          "liked": 0,
+          "content": "我是子评论的子评论",
+          "createTime": "2023-12-15T10:48:31",
+          "commentUser": {
+            "id": 1726508124156404000,
+            "name": "Creator",
+            "avatar": "https://picsum.photos/id/640/200/200"
+          },
+          "replyUser": {
+            "id": 1726508124156410400,
+            "name": "Test",
+            "avatar": "https://picsum.photos/id/640/200/200"
+          }
+        }
+      ],
+      "replyCount": 2
+    }
+  ],
+  "total": 2,
+  "size": 10,
+  "current": 1,
+  "orders": [],
+  "optimizeCountSql": true,
+  "searchCount": true,
+  "pages": 1
+}
+```
+
+testGetChildCommentList结果：
+
+```json
+{
+  "records": [
+    {
+      "id": 1735190139490119700,
+      "postId": 1726508124156407800,
+      "replyId": 1735143555490472000,
+      "liked": 0,
+      "content": "我是子评论",
+      "createTime": "2023-12-14T14:49:02",
+      "commentUser": {
+        "id": 1726508124156410400,
+        "name": "Test",
+        "avatar": "https://picsum.photos/id/640/200/200"
+      },
+      "replyUser": {
+        "id": 1726508124156404000,
+        "name": "Creator",
+        "avatar": "https://picsum.photos/id/640/200/200"
+      }
+    },
+    {
+      "id": 1735491998914306000,
+      "postId": 1726508124156407800,
+      "replyId": 1735190139490119700,
+      "liked": 0,
+      "content": "我是子评论的子评论",
+      "createTime": "2023-12-15T10:48:31",
+      "commentUser": {
+        "id": 1726508124156404000,
+        "name": "Creator",
+        "avatar": "https://picsum.photos/id/640/200/200"
+      },
+      "replyUser": {
+        "id": 1726508124156410400,
+        "name": "Test",
+        "avatar": "https://picsum.photos/id/640/200/200"
+      }
+    }
+  ],
+  "total": 2,
+  "size": 10,
+  "current": 1,
+  "orders": [],
+  "optimizeCountSql": true,
+  "searchCount": true,
+  "pages": 1
+}
+```
+
+## 碎碎念
+
+一般来说，除了较火的社交平台上的内容，其他平台上，一个视频或者文章下的评论多数不超过20个。
+
+对于大多数平台，直接按照评论时间倒序关联用户查询即可。
+
+还有一种实现方法是树形套娃实现，使用collection标签去递归查询子评论。
+
+## 小结
+
+整个实现过程，需要注意的是MyBatis-Plus对于自定义SQL的分页查询接口的开发，以及association标签的使用。
