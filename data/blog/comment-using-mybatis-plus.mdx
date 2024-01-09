@@ -146,45 +146,45 @@ public interface CommentMapper extends BaseMapper<Comment> {
 
 ```xml
 <resultMap id="topComment" type="com.example.model.response.comment.CommentInfo">
-        <id property="id" column="id"/>
-        <result property="content" column="content"/>
-        <result property="createTime" column="create_time"/>
-        <result property="postId" column="post_id" />
-        <result property="liked" column="liked" />
+    <id property="id" column="id"/>
+    <result property="content" column="content"/>
+    <result property="createTime" column="create_time"/>
+    <result property="postId" column="post_id" />
+    <result property="liked" column="liked" />
 
-        <association property="commentUser" javaType="com.example.model.response.user.UserInfo">
-            <id property="id" column="user_id"/>
-            <result property="avatar" column="avatar" />
-            <result property="name" column="name" />
-        </association>
+    <association property="commentUser" javaType="com.example.model.response.user.UserInfo">
+        <id property="id" column="user_id"/>
+        <result property="avatar" column="avatar" />
+        <result property="name" column="name" />
+    </association>
 
-        <association property="replyComments" select="getChildComments" column="rootId=id"/>
-        <association property="replyCount" select="getChildCount" column="rootId=id"/>
+    <association property="replyComments" select="getChildComments" column="rootId=id"/>
+    <association property="replyCount" select="getChildCount" column="rootId=id"/>
 
-    </resultMap>
+</resultMap>
 
-    <resultMap id="childComment" type="com.example.model.response.comment.CommentInfo">
-        <id property="id" column="id"/>
-        <result property="content" column="content"/>
-        <result property="createTime" column="create_time"/>
-        <result property="postId" column="post_id"/>
-        <result property="replyId" column="reply_id"/>
-        <result property="liked" column="liked"/>
+<resultMap id="childComment" type="com.example.model.response.comment.CommentInfo">
+    <id property="id" column="id"/>
+    <result property="content" column="content"/>
+    <result property="createTime" column="create_time"/>
+    <result property="postId" column="post_id"/>
+    <result property="replyId" column="reply_id"/>
+    <result property="liked" column="liked"/>
 
-        <association property="commentUser" javaType="com.example.model.response.user.UserInfo">
-            <id property="id" column="c_user_id"/>
-            <result property="avatar" column="u_avatar" />
-            <result property="name" column="u_name" />
-        </association>
-        <association property="replyUser" javaType="com.example.model.response.user.UserInfo">
-            <id property="id" column="pc_user_id"/>
-            <result property="avatar" column="pu_avatar" />
-            <result property="name" column="pu_name" />
-        </association>
+    <association property="commentUser" javaType="com.example.model.response.user.UserInfo">
+        <id property="id" column="c_user_id"/>
+        <result property="avatar" column="u_avatar" />
+        <result property="name" column="u_name" />
+    </association>
+    <association property="replyUser" javaType="com.example.model.response.user.UserInfo">
+        <id property="id" column="pc_user_id"/>
+        <result property="avatar" column="pu_avatar" />
+        <result property="name" column="pu_name" />
+    </association>
 
-    </resultMap>
+</resultMap>
 
-    <select id="pageTopComments" resultMap="topComment">
+<select id="pageTopComments" resultMap="topComment">
         select c.id,
                c.content,
                c.create_time,
@@ -200,9 +200,9 @@ public interface CommentMapper extends BaseMapper<Comment> {
           and c.root_id is null
           and c.deleted = 0
         order by ${sortField} desc
-    </select>
+</select>
 
-    <select id="getChildComments" resultMap="childComment">
+<select id="getChildComments" resultMap="childComment">
         select c.id,
                c.content,
                c.create_time,
@@ -224,16 +224,16 @@ public interface CommentMapper extends BaseMapper<Comment> {
           and c.deleted = 0
         order by c.create_time
         limit 3
-    </select>
+</select>
 
-    <select id="getChildCount" resultType="integer">
+<select id="getChildCount" resultType="integer">
         select count(*)
         from comment as c
         where root_id = #{rootId}
           and c.deleted = 0
-    </select>
+</select>
 
-    <select id="pageChildComments" resultMap="childComment">
+<select id="pageChildComments" resultMap="childComment">
         select c.id,
                c.content,
                c.create_time,
@@ -254,7 +254,7 @@ public interface CommentMapper extends BaseMapper<Comment> {
         where c.root_id = #{rootId}
           and c.deleted = 0
         order by c.create_time
-    </select>
+</select>
 ```
 
 XML中定义了两个resultMap，分别对应顶级评论和子评论，在其中使用association标签去关联其他查询内容。

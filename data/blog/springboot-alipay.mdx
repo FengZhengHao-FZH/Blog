@@ -1,0 +1,454 @@
+---
+title: 'SpringBoot集成支付宝支付'
+date: 2024-01-09T15:29:35Z
+tags: ['payment']
+summary: '本文介绍了SpringBoot项目中如何集成支付宝支付，从创建环境开始，详细介绍了整个集成的过程，并给出了简单的支付，支付回调，退款，退款回调和查询订单支付状态的示例代码。'
+layout: PostLayout
+bibliography: references-data.bib
+---
+
+## 需求分析
+
+在网站中集成支付功能，大多数是提供二维码供用户扫描，用户扫码支付后，处理支付宝回调完成业务。
+
+在这个过程中需要：
+
+- 后端请求支付宝创建订单并返回url，前端根据url生成二维码
+- 用户扫码支付后支付宝回调服务接口，后端处理回调完成业务
+- 在支付完成前询问支付宝订单是否支付，以便前端处理
+- 退款功能则根据产品性质决定是否开放
+
+## 创建支付宝沙盒环境
+
+在开发之前，要先去创建支付宝应用，这里使用沙盒环境
+
+1. 登录支付宝开发平台
+2. 打开控制台，创建沙盒环境
+3. 获取沙盒环境的appid，公钥和私钥
+
+## coplar内网穿透
+
+上文提到用户扫码支付后支付宝将回调服务接口，所以需要提供一个内网穿透域名，这里使用coplar实现
+
+1. [coplar官网](https://www.cpolar.com/)下载coplar
+2. 注册coplar账号
+3. 登录，打开验证界面执行命令
+4. 打开coplar安装目录，启动webui创建隧道
+
+## 依赖及配置
+
+1. 添加支付宝Maven依赖
+   ```xml
+   <dependency>
+      <groupId>com.alipay.sdk</groupId>
+      <artifactId>alipay-sdk-java</artifactId>
+      <version>4.22.110.ALL</version>
+   </dependency>
+   ```
+2. 创建Properties对支付宝进行配置
+   ```properties
+   # 沙盒环境网关，正式环境记得切换
+   alipay.server_url = https://openapi-sandbox.dl.alipaydev.com/gateway.do
+   # 上文支付宝appid
+   alipay.appid = 
+   alipay.format = json
+   alipay.charset = utf-8
+   alipay.sign_type = RSA2
+   # 上文的应用私钥
+   alipay.private-key=
+   # 上文的支付宝公钥，不是应用公钥
+   alipay.ali-public-key=
+   ```
+3. 创建配置类与之对应
+   ```java
+   // 注意路径
+   @Data
+   @Component
+   @PropertySource("classpath:/pay/alipay.properties")
+   @ConfigurationProperties(prefix = "alipay")
+   public class AliPayConfig {
+       private String serverUrl;
+       private String appId;
+       private String format;
+       private String charset;
+       private String signType;
+       private String privateKey;
+       private String aliPublicKey;
+   }
+   ```
+4. 创建支付宝配置常量类
+   ```java
+   public interface AliPayConstants {
+   
+       /**
+        * 穿透域名
+        * coplar域名，使用http
+        */
+       String URL = "";
+       
+       /**
+        * 回调接口
+        * 与controller层路径对应
+        */
+       String PAY_CALLBACK_API = "";
+   
+       /**
+        * 支付超时时间
+        */
+       String TIMEOUT_EXPRESS = "30m";
+   
+       /**
+        * 支付二维码超时时间
+        */
+       String QRCODE_TIMEOUT_EXPRESS = "3m";
+   
+       /**
+        * 支付回调地址
+        */
+       String PAY_CALLBACK_URL = URL + PAY_CALLBACK_API;
+   }
+   ```
+
+## 接口定义
+
+这里使用策略模式处理，直接将支付宝逻辑写在controller层也可以
+
+```java
+@RestController
+@RequestMapping("/pay")
+public class PayController {
+
+    @Resource
+    private PayStrategyContext payStrategyContext;
+
+    @PostMapping("/alipay/pay")
+    public Result<QrCodeResponse> alipayPay(@RequestBody @Validated @NotNull OrderIdRequest request) {
+        request.validId();
+        String url = payStrategyContext.executePayStrategy(PayStrategyEnum.ALIPAY, request.getId());
+        QrCodeResponse qrCodeResponse = QrCodeResponse.builder()
+                .url(url)
+                .build();
+        return Result.success("创建支付宝订单成功",qrCodeResponse);
+    }
+
+    @PostMapping("/alipay/callback")
+    public Result<Boolean> alipayCallback(HttpServletRequest request) {
+        Boolean success = payStrategyContext.executePayCallbackStrategy(PayStrategyEnum.ALIPAY, request);
+        return Result.success(success);
+    }
+
+    @PostMapping("/alipay/queryAlipayOrderStatus")
+    public Result<String> queryAlipayOrderStatus(@RequestBody @Validated @NotNull OrderIdRequest request) {
+        request.validId();
+        String status = payStrategyContext.executeQueryOrderStatusStrategy(PayStrategyEnum.ALIPAY, request.getId());
+        return Result.success("查询支付宝订单状态成功",status);
+    }
+}
+```
+
+```java
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class PayStrategyContext {
+
+    private final Map<String, PayStrategy> payStrategyMap;
+
+    public String executePayStrategy(PayStrategyEnum payStrategyEnum, String orderId){
+
+        if(!payStrategyMap.containsKey(payStrategyEnum.getPayServiceName())){
+            log.error("没有对应的支付策略，无法进行支付");
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR,"没有对应的支付策略，无法进行支付");
+        }
+        return payStrategyMap.get(payStrategyEnum.getPayServiceName()).pay(orderId);
+    }
+
+    public Boolean executePayCallbackStrategy(PayStrategyEnum payStrategyEnum, HttpServletRequest request){
+        if(!payStrategyMap.containsKey(payStrategyEnum.getPayServiceName())){
+            log.error("没有对应的支付策略，无法进行支付回调");
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR,"没有对应的支付策略，无法进行支付回调");
+        }
+        return payStrategyMap.get(payStrategyEnum.getPayServiceName()).payCallback(request);
+    }
+
+    public String executeQueryOrderStatusStrategy(PayStrategyEnum payStrategyEnum, String orderId){
+        if(!payStrategyMap.containsKey(payStrategyEnum.getPayServiceName())){
+            log.error("没有对应的支付策略，无法进行支付查询");
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR,"没有对应的支付策略，无法进行支付查询");
+        }
+        return payStrategyMap.get(payStrategyEnum.getPayServiceName()).queryPayStatus(orderId);
+    }
+}
+```
+
+```java
+@Getter
+@AllArgsConstructor
+public enum PayStrategyEnum {
+
+    /**
+     * 支付方式枚举
+     */
+    WECHAT_PAY("weChatPayServiceImpl", "微信支付"),
+    ALIPAY("aliPayServiceImpl","支付宝支付");
+
+    /**
+     * 服务实现类名称
+     */
+    private final String payServiceName;
+
+    /**
+     * 信息
+     */
+    private final String message;
+}
+```
+
+```java
+public interface PayStrategy {
+    /**
+     * 支付
+     * @param orderId 订单号
+     * @return 支付二维码
+     */
+    String pay(String orderId);
+    /**
+     * 支付回调
+     * @param request 请求
+     * @return 是否成功
+     */
+    Boolean payCallback(HttpServletRequest request);
+
+    /**
+     * 查询支付状态
+     * @param orderId 订单号
+     * @return 支付状态
+     */
+    String queryPayStatus(String orderId);
+}
+```
+
+## 支付功能
+
+```java
+public String pay(String orderId) {
+    // 查询订单信息
+    Order order = orderService.getOrderByOrderId(orderId);
+    // 构建支付参数
+    AlipayTradePrecreateRequest request = getAlipayTradePrecreateRequest(order);
+    String qrCode;
+    try {
+        // 创建客户端
+        AlipayClient alipayClient = initAlipayClient();
+        // 请求支付宝创建订单
+        AlipayTradePrecreateResponse response = alipayClient.execute(request);
+        // 校验请求状态
+        if ((null == response.getBody()) || !response.isSuccess()) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR,"支付宝支付失败");
+        }
+        qrCode = response.getQrCode();
+    } catch (AlipayApiException e) {
+        throw new RuntimeException(e);
+    }
+    // 返回url，供前端生成二维码
+    return qrCode;
+}
+
+private static AlipayTradePrecreateRequest getAlipayTradePrecreateRequest(Order order) {
+    AlipayTradePrecreateModel modelForQrCodePay = new AlipayTradePrecreateModel();
+
+    modelForQrCodePay.setBody("消费");
+    modelForQrCodePay.setSubject("消费");
+    modelForQrCodePay.setOutTradeNo(order.getId());
+    modelForQrCodePay.setTimeoutExpress(AliPayConstants.TIMEOUT_EXPRESS);
+    modelForQrCodePay.setTotalAmount(order.getPrice().toString());
+    modelForQrCodePay.setQrCodeTimeoutExpress(AliPayConstants.QRCODE_TIMEOUT_EXPRESS);
+
+    // 构建请求
+    AlipayTradePrecreateRequest request = new AlipayTradePrecreateRequest();
+    request.setBizModel(modelForQrCodePay);
+    // 支付完成回调地址
+    request.setNotifyUrl(AliPayConstants.PAY_CALLBACK_URL);
+    return request;
+}
+
+// 创建支付宝客户端
+private AlipayClient initAlipayClient() {
+    return new DefaultAlipayClient(
+            aliPayConfig.getServerUrl(),
+            aliPayConfig.getAppId(),
+            aliPayConfig.getPrivateKey(),
+            aliPayConfig.getFormat(),
+            aliPayConfig.getCharset(),
+            aliPayConfig.getAliPublicKey(),
+            aliPayConfig.getSignType()
+    );
+}
+```
+
+## 支付完成回调
+
+```java
+public Boolean payCallback(HttpServletRequest request) {
+    log.info("支付宝支付回调");
+    // 0.处理支付宝回调参数
+    Map<String, String> reqMap = dealAlipayCallbackParam(request);
+    log.info("获取回调参数{}", reqMap);
+
+    // 1.校验订单支付状态
+    String tradeStatus = reqMap.get("trade_status");
+    if (!tradeStatus.equals("TRADE_SUCCESS")) {
+        throw new BusinessException(ErrorCode.SYSTEM_ERROR,"支付宝订单未支付");
+    }
+
+    // 获取订单号
+    String orderId = reqMap.get("out_trade_no");
+    log.info("订单编号：{}", orderId);
+
+    // 2.业务处理
+    String refundFeeStr = reqMap.get("refund_fee");
+
+    // 如果没有退款金额 处理正常支付业务
+    if ( refundFeeStr == null || refundFeeStr.isEmpty() || refundFeeStr.equals("0")) {
+        log.info("处理支付宝-支付回调业务处理");
+        // 将订单状态更新为已支付
+        orderService.orderNotify(orderId, PayStrategyEnum.ALIPAY.getMessage());
+        return true;
+    }
+    return false;
+}
+    
+public Map<String, String> dealAlipayCallbackParam(HttpServletRequest req) {
+    // 使用LinkedHashMap保持插入顺序
+    Map<String, String> reqMap = new LinkedHashMap<>();
+    Map<String, String[]> requestParamsMap = req.getParameterMap();
+
+    // 直接使用Stream API处理参数名称和值，避免使用手动循环
+    requestParamsMap.forEach((name, values) -> {
+        // 使用String.join方法连接字符串数组，更加简洁
+        String valueStr = String.join(",", values);
+        reqMap.put(name, valueStr);
+    });
+    return reqMap;
+}
+```
+
+## 查询订单状态
+
+```java
+public String queryPayStatus(String orderId) {
+    log.info("查询订单：{} 的支付状态", orderId);
+    
+    AlipayTradeQueryRequest tradeQueryRequest = new AlipayTradeQueryRequest();
+
+    // 1.构建请求
+    AlipayTradeQueryRequest tradeQueryRequest = new AlipayTradeQueryRequest();
+    AlipayTradeQueryModel model = new AlipayTradeQueryModel();
+    model.setOutTradeNo(orderId);
+    tradeQueryRequest.setBizModel(model);
+
+    String tradeStatus = "UNKNOWN";
+    try {
+        // 2.发起查询
+        AlipayClient alipayClient = initAlipayClient();
+        AlipayTradeQueryResponse execute = alipayClient.execute(tradeQueryRequest);
+        log.info("isSuccess:{}", execute.isSuccess());
+
+        // 校验查询请求返回状态
+        if (!execute.isSuccess()) {
+            tradeStatus = "UNKNOWN";
+            return tradeStatus;
+        }
+
+        // 获取返回结果
+        String body = execute.getBody();
+        log.info("Body:{}", body);
+
+        // 解析返回结果
+        JSONObject jsonObject = JSONObject.parseObject(body).getJSONObject("alipay_trade_query_response");
+        String tradeStatusStr = jsonObject.getString("trade_status");
+
+        // 校验返回结果 并返回结果
+        if (tradeStatusStr != null && tradeStatusStr.equals("TRADE_SUCCESS")) {
+            tradeStatus = "SUCCESS";
+        }
+    } catch (AlipayApiException e) {
+        return "UNKNOWN";
+    }
+    return tradeStatus;
+}
+```
+
+## 退款和退款回调
+
+```java
+public Boolean refund(String orderId) {
+    log.info("退款订单：{}", orderId);
+
+    // 0.只有已支付订单可以退款
+    Order order = orderService.getOrderByOrderId(orderId);
+    if (!order.getStatus().equals(OrderStatusEnums.PAYED.getCode())) {
+        throw new BusinessException(ErrorCode.SYSTEM_ERROR,"订单状态不正确");
+    }
+
+    // 1.构建退款用model
+    JSONObject refundModel = new JSONObject();
+    refundModel.put("out_trade_no", order.getId());
+    refundModel.put("refund_amount", order.getPrice());
+    refundModel.put("out_request_no", "R" + order.getId());
+    log.info("refundModel参数：{}", refundModel);
+
+    // 2.构建请求参数
+    AlipayTradeRefundRequest request = new AlipayTradeRefundRequest();
+    request.setBizContent(refundModel.toString());
+
+    //3. 发起退款请求
+    try {
+        AlipayClient alipayClient = initAlipayClient();
+        AlipayTradeRefundResponse response = alipayClient.execute(request);
+        log.info("退款结果:{}", response.getBody());
+        if ((null == response.getBody()) || !response.isSuccess()) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR,"退款支付宝订单失败");
+        }
+        return true;
+    } catch (AlipayApiException e) {
+        throw new BusinessException(ErrorCode.SYSTEM_ERROR,"退款失败");
+    }
+}
+
+public Boolean refundCallback(HttpServletRequest request) {
+    log.info("支付宝退款回调");
+    // 0.处理支付宝回调参数
+    Map<String, String> reqMap = dealAlipayCallbackParam(request);
+    log.info("回调参数{}", reqMap);
+    // 1.校验订单支付状态
+    String tradeStatus = reqMap.get("trade_status");
+    if (!tradeStatus.equals("TRADE_SUCCESS")) {
+        throw new BusinessException(ErrorCode.SYSTEM_ERROR,"支付宝订单未支付");
+    }
+
+    // 获取订单号
+    String orderId = reqMap.get("out_trade_no");
+    log.info("退款回调，订单编号：{} ", orderId);
+
+    // 2.业务处理
+    String refundFeeStr = reqMap.get("refund_fee");
+    // 没有退款金额
+    if ( refundFeeStr == null || refundFeeStr.isEmpty() || refundFeeStr.equals("0")) {
+        throw new BusinessException(ErrorCode.SYSTEM_ERROR,"退款金额错误");
+    }
+
+    BigDecimal refundFee = new BigDecimal(refundFeeStr);
+    log.info("支付宝退款回调,业务处理,退款金额为：{}", refundFee);
+    if (refundFee.compareTo(new BigDecimal(0)) > 0) {
+        // 业务处理
+        orderService.orderRefund(orderId);
+        return true;
+    }
+    return false;
+}
+```
+
+## 小结
+
+本文介绍了SpringBoot项目中如何集成支付宝支付，首先在支付宝控制台创建沙盒环境沙盒环境为例，然后使用coplar创建穿透域名，接着对支付宝进行配置，最后详细介绍了整个支付，支付回调，退款，退款回调和查询订单支付状态的简单操作。[云端源想支付微实战](https://ydcode.cn/projectPracticeDetails?id=1)

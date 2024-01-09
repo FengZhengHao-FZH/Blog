@@ -1,11 +1,12 @@
 {
   "redis":3,
-  "数据库":2,
-  "设计模式":1,
+  "database":2,
+  "design-patterns":1,
   "gateway": 2,
   "nacos": 2,
   "spring cloud":1,
   "xxl-job": 1,
-  "事务": 1,
-  "mybatis-plus": 1
+  "transaction": 1,
+  "mybatis-plus": 1,
+  "payment": 1
 }
