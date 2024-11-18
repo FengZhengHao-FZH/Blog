@@ -1,7 +1,7 @@
 {
   "redis":3,
   "database":2,
-  "design-patterns":1,
+  "design-patterns":2,
   "gateway": 2,
   "nacos": 2,
   "spring cloud":1,

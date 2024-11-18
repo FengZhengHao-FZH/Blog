@@ -1,0 +1,232 @@
+---
+title: '责任链模式：以三国杀求无懈可击为例'
+date: 2024-11-18T18:25:35Z
+tags: ['design-patterns']
+summary: '本文主要介绍了什么是责任链设计模式，并以游戏三国杀中使用锦囊牌求无懈可击的过程为例详细介绍了如何实现责任链模式，最后给出了其使用建议和注意事项。'
+layout: PostLayout
+bibliography: references-data.bib
+---
+## 责任链模式概述
+
+### 1.1 责任链模式是什么？
+
+责任链模式（Chain of Responsibility Pattern）是一种行为型设计模式，它允许多个对象有机会处理请求，从而避免请求的发送者和接收者之间的耦合关系。这种模式将这些对象连成一条链，并沿着这条链传递请求，直到有一个对象处理它为止。
+
+### 1.2应用实例
+
+击鼓传花：传递沙包，直到音乐停止。
+
+事件冒泡：在JavaScript中，事件从最具体的元素开始，逐级向上传播。
+
+Web服务器：如Apache Tomcat处理字符编码，Servlet的Filter。
+
+### 1.3 责任链模式的目的
+
+责任链模式的主要目的是将请求的发送者和接收者解耦，同时动态地分配责任。它允许多个对象有机会处理请求，使得一个对象可以向多个对象中的一个提交请求，而不需要明确指定哪个对象将处理该请求。
+
+### 1.4 使用场景
+
+责任链模式适用于以下场景：
+
+- 多个对象可能处理同一个请求，具体哪个对象处理该请求应该在运行时决定。
+- 需要动态指定一组对象处理请求。
+- 需要避免请求发送者和接收者之间的耦合。
+
+### 1.5 核心结构
+
+责任链模式的核心结构包括：
+
+- **Handler（抽象处理者）**：定义一个处理请求的接口，包含一个方法，用于设置下一个处理者。
+- **ConcreteHandler（具体处理者）**：实现Handler接口，定义具体的处理逻辑。如果它可以处理请求，则处理之，否则将请求传递给链中的下一个处理者。
+
+## 以三国杀为例代码解释
+
+### 2.1 锦囊牌和抽象处理者
+
+在《三国杀》中，锦囊牌游戏的核心元素。简单定义：
+
+```java
+@Data
+public class TrickCard {
+        private String name;
+        private boolean handle;
+}
+```
+
+每个武将都是一个处理者，他们可以选择使用技能来处理锦囊牌，这里使用建造者模式实现：
+
+```java
+public abstract class BuildHandler<T> {
+		protected BuildHandler<T> next;
+
+		public void next(BuildHandler<T> handler){
+			this.next = handler;
+		}
+
+		public abstract void handle(T t);
+
+		public static class Builder<T>{
+			private BuildHandler<T> head;
+			private BuildHandler<T> tail;
+
+			public Builder<T> addHandler(BuildHandler<T> handler){
+				if (null == head){
+					head = this.tail = handler;
+					return this;
+				}
+				this.tail.next(handler);
+				this.tail = handler;
+				return this;
+			}
+
+			public BuildHandler<T> build(){
+				return this.head;
+			}
+		}
+	}
+```
+
+### 2.2 具体的武将及其对于锦囊牌处理方法
+
+三国杀中有众多武将拥有技能可以处理锦囊牌，每个武将都是一个处理者：
+
+```java
+// 黄月英
+public class HuangYueYing extends BuildHandler<TrickCard> {
+		private boolean hasUnleashCard;
+
+		public HuangYueYing(boolean hasUnleashCard) {
+			this.hasUnleashCard = hasUnleashCard;
+		}
+
+		@Override
+		public void handle(TrickCard card) {
+			if (hasUnleashCard){
+				// 假设拥有无懈可击牌就使用
+				System.out.println("黄月英使用无懈可击牌处理锦囊牌");
+				System.out.println("发动技能 - 集智");
+				this.hasUnleashCard = false;
+				card.setHandle(true);
+            } else {
+				System.out.println("黄月英没有无懈可击牌");
+				if (this.next != null){
+					this.next.handle(card);
+				}
+			}
+		}
+	}
+```
+
+```java
+//于吉
+public class YuJi extends BuildHandler<TrickCard> {
+		private boolean activeSkill;
+
+		public YuJi(boolean activeSkill) {
+			this.activeSkill = activeSkill;
+		}
+
+		@Override
+		public void handle(TrickCard card) {
+			if (this.activeSkill){
+				System.out.println("于吉发动技能处理锦囊牌");
+				card.setHandle(true);
+            } else {
+				System.out.println("于吉不发动技能处理锦囊");
+				if (this.next != null){
+					this.next.handle(card);
+				}
+			}
+		}
+	}
+```
+
+```java
+// 卧龙诸葛
+public class WoLong extends BuildHandler<TrickCard> {
+		private boolean activeSkill;
+
+		public WoLong(boolean activeSkill) {
+			this.activeSkill = activeSkill;
+		}
+
+
+		@Override
+		public void handle(TrickCard card) {
+			if (this.activeSkill){
+				System.out.println("卧龙诸葛发动技能处理锦囊");
+				card.setHandle(true);
+			} else {
+				System.out.println("卧龙诸葛不发动技能");
+				if (this.next != null){
+					this.next.handle(card);
+				}
+			}
+		}
+	}
+```
+
+
+### 2.3 客户端代码模拟游戏过程
+
+客户端代码创建玩家并设置责任链，然后模拟使用锦囊牌的过程：
+
+```java
+public class SanGuoKill {
+   public static void main(String[] args){
+        TrickCard card = new TrickCard();
+		card.setName("无中生有");
+		card.setHandle(false);
+
+		System.out.println("开始处理锦囊无中生有");
+		BuildHandler.Builder<TrickCard> builder = new BuildHandler.Builder<>();
+		builder.addHandler(new HuangYueYing(false))
+				.addHandler(new YuJi(true))
+				.addHandler(new WoLong(true));
+
+		builder.build().handle(card);
+		if (card.isHandle()){
+			System.out.println(card.getName() + "被无懈可击处理");
+		} else {
+			System.out.println(card.getName() + "发动成功！");
+		}
+    }
+}
+```
+
+### 2.4 结果
+
+上述情况下结果为：
+
+```
+开始处理锦囊无中生有
+黄月英没有无懈可击牌
+于吉不发动技能处理锦囊
+卧龙诸葛发动技能处理锦囊
+无中生有被无懈可击处理
+```
+
+这样，就实现了多个处理器（武将）链式处理（请求）锦囊牌，而无需关注究竟是谁处理了这个请求（实际游戏需要关注）。
+
+## 责任链模式的优缺点、使用建议和注意事项
+
+### 3.1 优点
+
+- 解耦：发送者和接收者之间的耦合度降低。
+- 动态分配：可以动态地改变链中的处理对象。
+- 灵活性：可以根据需要增加新的处理对象
+
+### 3.2 缺点
+
+- 性能问题：如果链过长，请求可能会经过多个处理者，影响性能。
+- 调试困难：链中的处理逻辑可能难以跟踪和调试。
+
+### 3.3 使用建议
+
+- 明确责任：确保每个处理者都明确自己的责任。
+- 避免过长的责任链：过长的责任链可能导致性能问题和调试困难。
+
+### 3.4 注意事项
+
+- 处理请求的终止：确保责任链有一个明确的终止条件，避免无限循环。
+- 异常处理：在责任链中适当处理异常，避免请求处理失败。
