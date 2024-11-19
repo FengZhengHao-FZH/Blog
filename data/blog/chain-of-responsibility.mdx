@@ -1,6 +1,6 @@
 ---
 title: '责任链模式：以三国杀求无懈可击为例'
-date: 2024-11-18T18:25:35Z
+date: 2024-03-18T18:25:35Z
 tags: ['design-patterns']
 summary: '本文主要介绍了什么是责任链设计模式，并以游戏三国杀中使用锦囊牌求无懈可击的过程为例详细介绍了如何实现责任链模式，最后给出了其使用建议和注意事项。'
 layout: PostLayout
@@ -149,7 +149,6 @@ public class WoLong extends BuildHandler<TrickCard> {
 		public WoLong(boolean activeSkill) {
 			this.activeSkill = activeSkill;
 		}
-
 
 		@Override
 		public void handle(TrickCard card) {
