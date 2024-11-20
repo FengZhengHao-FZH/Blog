@@ -11039,9 +11039,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"blog@workspace:.":
+"tailwind-nextjs-starter-blog@workspace:.":
   version: 0.0.0-use.local
-  resolution: "blog@workspace:."
+  resolution: "tailwind-nextjs-starter-blog@workspace:."
   dependencies:
     "@next/bundle-analyzer": 13.5.3
     "@svgr/webpack": ^8.0.1
