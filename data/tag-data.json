@@ -9,5 +9,7 @@
   "transaction": 1,
   "mybatis-plus": 1,
   "payment": 1,
-  "jsr303": 1
+  "jsr303": 1,
+  "mail": 1,
+  "rabbitmq": 1
 }

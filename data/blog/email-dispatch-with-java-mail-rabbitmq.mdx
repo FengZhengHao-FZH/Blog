@@ -1,0 +1,321 @@
+---
+title: 'Java Mail + RabbitMQ实现邮件的发送'
+date: 2024-05-18T20:22:11Z
+tags: ['mail','rabbitmq']
+summary: '本文介绍了如何在SpringBoot项目中结合Java Mail和RabbitMQ实现邮件的异步发送。通过这种方式，可以提高系统在处理邮件发送任务时的响应速度和可扩展性，特别是在用户注册验证、密码重置、订单通知等场景中。'
+layout: PostLayout
+bibliography: references-data.bib
+---
+## 概述
+
+在应用开发中，邮件发送是一个常见的需求，比如用户注册验证、密码重置、订单通知等。Java Mail API 提供了一种简单的方式来发送邮件，而 RabbitMQ 作为一个消息队列系统，可以帮助我们异步处理邮件发送任务，提高系统的响应速度和可扩展性。本文将介绍如何在SpringBoot项目中结合 Java Mail 和 RabbitMQ 来实现邮件的发送。
+
+下面，我将以为新注册用户发送邮箱验证码举例。
+
+## 依赖、环境配置
+
+首先，我们需要在项目的 pom.xml 文件中添加必要依赖。
+
+```xml
+<!--thymeleaf-->
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+     <artifactId>spring-boot-starter-thymeleaf</artifactId>
+</dependency>
+<!--java-mail-->
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-mail</artifactId>
+</dependency>
+<!--rabbitmq-->
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-amqp</artifactId>
+</dependency>
+```
+
+然后，在SpringBoot的YML或Properties配置文件中对mail和RabbitMQ进行配置：
+
+```yaml
+spring:
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+
+  mail:
+    host: smtp.qq.com
+    username: XXXXXXX@qq.com
+    # 妥善保管
+    password: XXXXXXX
+    default-encoding: UTF-8
+    protocol: smtp
+    properties:
+      mail:
+        smtp:
+          auth: true
+          ssl:
+            enable: true
+```
+
+## 邮件发送模板
+
+我们将创建一个类来记录邮件的基本信息：
+
+```java
+@Data
+@Builder
+public class MailForm {
+
+    /**
+     * 发件人
+     */
+    private String from;
+
+    /**
+     * 收件人
+     */
+    private List<String> to;
+
+    /**
+     * 主题
+     */
+    private String subject;
+
+    /**
+     * 文本内容
+     */
+    private String text;
+
+    /**
+     * 附件路径
+     */
+    private List<String> attachmentPath;
+
+    /**
+     * 模板名称
+     */
+    private String templateName;
+
+    /**
+     * 模板变量
+     */
+    private Map<String,Object> contextVar;
+}
+
+```
+
+## 邮件处理工具类
+
+接着，我们编写一个邮件的发送工具类：
+
+```java
+@Slf4j
+@Component
+public class MailSendUtils {
+
+    @Resource
+    private JavaMailSender mailSender;
+
+    @Resource
+    private MailProperties mailProperties;
+
+    @Resource
+    private TemplateEngine templateEngine;
+
+    public void sendSimpleMail(MailForm form) {
+        try {
+            SimpleMailMessage mailMessage = new SimpleMailMessage();
+            mailMessage.setFrom(mailProperties.getUsername());
+            List<String> to = form.getTo();
+            String[] toUsers = form.getTo().toArray(new String[to.size()]);
+            mailMessage.setTo(toUsers);
+            mailMessage.setSubject(form.getSubject());
+            mailMessage.setText(form.getText());
+            mailSender.send(mailMessage);
+        } catch (Exception e) {
+            log.error("邮件发送失败:{}", e.getMessage(),e);
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR,"发送邮件失败");
+        }
+    }
+
+    public void sendHtmlMail(MailForm form) {
+        try {
+            MimeMessage mimeMessage = mailSender.createMimeMessage();
+            MimeMessageHelper messageHelper = new MimeMessageHelper(mimeMessage, true);
+            messageHelper.setFrom(mailProperties.getUsername());
+            List<String> to = form.getTo();
+            String[] toUsers = form.getTo().toArray(new String[to.size()]);
+            messageHelper.setTo(toUsers);
+            messageHelper.setSubject(form.getSubject());
+            messageHelper.setText(form.getText(), true);
+
+            // 本地附件
+            if (form.getAttachmentPath() != null) {
+                List<String> pathList = form.getAttachmentPath();
+                for (String attachmentPath : pathList) {
+                    try (InputStream inputStream = new URL(attachmentPath).openStream()) {
+                        ByteArrayResource byteArrayResource = new ByteArrayResource(inputStream.readAllBytes());
+                        String filename = attachmentPath.substring(attachmentPath.lastIndexOf("/") + 1);
+                        messageHelper.addAttachment(filename, byteArrayResource);
+                    }
+
+                }
+            }
+            mailSender.send(mimeMessage);
+        } catch (Exception e) {
+            log.error("邮件发送失败:{}", e.getMessage(),e);
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR,"发送邮件失败");
+        }
+    }
+
+    public void sendTemplateMail(MailForm form) {
+        try {
+            Context context = new Context();
+            context.setLocale(Locale.CHINA);
+            context.setVariables(form.getContextVar());
+            String templateMail = templateEngine.process(form.getTemplateName(), context);
+            form.setText(templateMail);
+            sendHtmlMail(form);
+        } catch (Exception e) {
+            log.error("邮件发送失败:{}", e.getMessage(),e);
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR,"发送邮件失败");
+        }
+    }
+}
+
+```
+
+## RabbitMQ配置
+
+下面我们对RabbitMQ进行配置，声明队列和交换机并进行绑定（或者直接向队列中添加信息）：
+
+```java
+@Configuration
+public class RabbitmqConfig {
+
+    /** 注册验证码邮件 **/
+    @Bean
+    public Queue mailRegisterQueue() {
+        return new Queue(RabbitmqConstants.MAIL_REGISTER_QUEUE, true, false, false, null);
+    }
+
+    @Bean
+    public Exchange mailRegisterExchange() {
+        return new TopicExchange(RabbitmqConstants.MAIL_REGISTER_EXCHANGE, true, false, null);
+    }
+
+    @Bean
+    public Binding RegisterBinding() {
+        return new Binding(RabbitmqConstants.MAIL_REGISTER_QUEUE, Binding.DestinationType.QUEUE, RabbitmqConstants.MAIL_REGISTER_EXCHANGE,
+                RabbitmqConstants.MAIL_REGISTER_ROUTING_KEY, null);
+    }
+}
+```
+
+## RabbitMQ消息监听器
+
+接下来，我们需要一个消息监听器来监听 RabbitMQ 中的消息，并使用 Java Mail API 发送邮件。
+
+```java
+@Slf4j
+@Component
+public class RabbitMQListener {
+
+    @Resource
+    private MailSendService mailSendService;
+
+    @RabbitListener(queues = RabbitmqConstants.MAIL_REGISTER_QUEUE,ackMode= "MANUAL")
+    public void sendCode(Message message, Channel channel, String username) throws IOException {
+        log.info("为用户发送注册验证码信息：{}", username);
+        try {
+            mailSendService.sendCheckCode(username);
+            // 手动确实消息发送成功
+            channel.basicAck(message.getMessageProperties().getDeliveryTag(),false);
+            log.info("邮件发送成功");
+        } catch (BusinessException | IOException e) {
+            log.error("邮件发送失败:{}", e.getMessage());
+            // 消息处理失败，并重新入队
+            channel.basicNack(message.getMessageProperties().getDeliveryTag(),false,true);
+            throw new BusinessException(ErrorCode.FAIL,"发送邮件失败");
+        }
+    }
+}
+```
+
+其中mailSendService的定义如下：
+
+```java
+@Slf4j
+@Component
+public class MailSendService {
+
+    @Resouthrce
+    private MailSendUtils mailSendUtils;
+
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
+
+    public void sendCheckCode(String username) {
+        List<String> to = new ArrayList<>();
+        to.add(username);
+        String subject = "注册验证码";
+        String template = "CheckCodeEmail";
+        // 生成指定长度的数字验证码
+        String code = CodeMaker.creatCode(6);
+        Map<String,Object> contextVar = new HashMap<>();
+        contextVar.put("code", code);
+        MailForm form = MailForm.builder()
+                .to(to)
+                .subject(subject)
+                .templateName(template)
+                .contextVar(contextVar)
+                .build();
+        mailSendUtils.sendTemplateMail(form);
+        // save code in redis
+        stringRedisTemplate.opsForValue().set(RedisConstants.REGISTER_CODE_KEY + username, code, RedisConstants.REGISTER_CODE_TTL, TimeUnit.MINUTES);
+    }
+}
+
+```
+
+对应的，在resources/templates目录下新建thymeleaf的模板文件文件CheckCodeEmail.html
+
+## 邮件发送触发
+
+最后，我们需要一个控制器或者服务来触发邮件的异步发送。
+
+```java
+@PostMapping("/sendCode")
+public Result<Void> sendCode(@RequestBody @Validated EmailRequest request) {
+    if (!userService.checkEmail(request.getUsername())) {
+        return Result.fail("邮箱已注册");
+    }
+    rabbitTemplate.convertAndSend(RabbitmqConstants.MAIL_REGISTER_EXCHANGE,RabbitmqConstants.MAIL_REGISTER_ROUTING_KEY, request.getUsername());
+    return Result.success("发送验证码成功");
+}
+```
+
+## 测试
+
+此处我们使用JUnit进行单元测试：
+
+```java
+@SpringBootTest
+class SuperFanApplicationTests {
+    @Resource
+    private RabbitTemplate rabbitTemplate;
+
+    @Test
+    void testMqSendEmail() {
+        rabbitTemplate.convertAndSend(RabbitmqConstants.MAIL_REGISTER_EXCHANGE,RabbitmqConstants.MAIL_REGISTER_ROUTING_KEY, "XXXX@qq.com");
+    }
+}
+```
+
+运行相应的测试方法，即可在对应的邮箱收到相应的邮件
+
+## 总结
+
+通过上述步骤，我们成功地将 Java Mail 和 RabbitMQ 结合起来，实现了多种类型的邮件的异步发送。这种模式可以显著提高应用性能，尤其是在高并发场景下。你可以根据实际需求调整邮件内容和配置，以满足不同的业务场景。
