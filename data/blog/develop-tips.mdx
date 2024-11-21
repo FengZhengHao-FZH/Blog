@@ -1,0 +1,245 @@
+---
+title: 'SpringBoot开发中实用的小技巧'
+date: 2024-06-20T11:22:31Z
+tags: ['tips',]
+summary: '本文分享了SpringBoot开发中的几个实用技巧，包括优化Set集合操作、使用Map的getOrDefault方法、高效迭代Map、利用Map的remove方法、MySQL的TRUNCATE TABLE命令、资源的优雅关闭以及Spring事务中的手动回滚。这些技巧有助于提升开发效率和代码质量。'
+layout: PostLayout
+bibliography: references-data.bib
+---
+## 巧妙使用set集合的add方法
+
+当你想要想set集合中添加一个新元素，往往会先使用contains方法判断，然后调用add方法，代码like:
+
+```java
+Set mySet = getSet();
+if (!mySet.contains("foo")) {
+  mySet.add("foo");
+  // 其他操作
+}
+```
+
+> 实际上，Java中的Set的add()方法用于将特定元素添加到Set集合中。仅当集合中不存在指定的元素时，该函数才添加该元素；否则，如果集合中已存在该元素，则该函数返回False。
+
+上述代码可以优化为：
+
+```java
+Set mySet = getSet();
+if (mySet.add("foo")) {
+  // 其他操作
+}
+```
+
+## Java中map.getOrDefault()方法的妙用
+
+```java
+//如果在Map中存在key，则返回key所对应的的value。
+//如果在Map中不存在key，则返回默认值。
+Map.getOrDefault(Object key, V defaultValue);
+```
+
+妙用：统计出现次数
+
+例子：数组中占比超过一半的元素称之为主要元素。给定一个整数数组，找到它的主要元素。若没有，返回-1。
+
+| 示例 | 输入                  | 输出 |
+|----|---------------------|----|
+| 1  | [1,2,6,9,6,9,6,6,6] | 5  |
+| 2  | [3,2]               | -1 |
+
+解决方法：
+
+```java
+public int majorityElement(int[] nums) {
+  Map<Integer, Integer> map = new HashMap<>();
+    for (int num : nums) {
+        // 每有一个nums[i]，map的value就+1
+        map.put(num, map.getOrDefault(num, 0) + 1);
+        if (map.get(num) > nums.length / 2) {
+            return num;
+        }
+    }
+  return -1;
+}
+```
+
+## Map的高效迭代
+
+原始代码：
+
+```java
+Map<String, Integer> map = new HashMap<>();
+// 假设 map 已经填充了数据
+for (String key : map.keySet()) {
+    Integer value = map.get(key);
+    System.out.println("Key: " + key + ", Value: " + value);
+}
+```
+
+使用 entrySet 迭代器：直接遍历 Map 的 entrySet 而不是通过 keySet 获取键再调用 Map.get(key)，可以避免额外的查找操作，提高效率。
+
+优化后的代码：
+
+```java
+Map<String, Integer> map = new HashMap<>();
+// 假设 map 已经填充了数据
+
+for (Map.Entry<String, Integer> entry : map.entrySet()) {
+    String key = entry.getKey();
+    Integer value = entry.getValue();
+    System.out.println("Key: " + key + ", Value: " + value);
+}
+```
+
+## 利用map.remove(key) 的返回值
+
+有时，我们想要获取map中元素做一些处理后从map中删除这个元素
+
+原始代码：
+
+```java
+Map myMap = getMap();
+String v = myMap.get("foo");
+// 其他处理
+myMap.remove("foo");
+```
+
+在使用map.get(key) 后 map.remove(key) 都会导致两次哈希查找操作。由于 map.remove(key) 本身会返回被移除的值，因此可以直接使用 remove 方法来获取并移除值，从而减少一次查找操作。
+
+优化后的代码：
+
+```java
+Map myMap = getMap();
+String v = myMap.remove("foo");
+// 其他处理
+```
+
+## MySQL中的TRUNCATE TABLE命令
+
+有时，我们需要清空表中数据，我们可以使用TRUNCATE命令会立即删除表中的所有数据，并将AUTO_INCREMENT重置
+
+```mysql
+TRUNCATE TABLE table_name;
+```
+
+与DROP TABLE的区别：
+
+1. TRUNCATE会更快。
+2. TRUNCATE是DDL（数据定义语言），会自动提交，及时使用事务也**无法回滚**。
+3. TRUNCATE不会记录binlog，无法根据日志进行复制和备份。
+4. TRUNCATE会释放磁盘空间。
+5. TRUNCATE无法条件删除数据，**使用时务必备份**。
+
+## 更优雅的关闭资源
+
+传统使用try-catch-finally关闭资源：
+
+```java
+BufferedWriter writer = null;
+try {
+    writer = new BufferedWriter(new FileWriter(fileName));
+    // do something with the file we've opened
+    writer.write(str);
+} catch (IOException e) {
+   // handle the exception
+} finally {
+    try {
+        if (writer != null)
+            writer.close();
+    } catch (IOException e) {
+       // handle the exception
+    }
+}
+```
+
+实际上，在java1.7后，新增了try-with-resources，通过这种写法可以更优雅的关闭资源：
+
+```java
+// 单资源
+try(BufferedWriter writer = new BufferedWriter(new FileWriter(fileName))){
+  // do something with the file we've opened
+  writer.write(str);
+}
+catch(IOException e){
+  // handle the exception
+}
+
+// 多资源
+// 使用;分割
+try (BufferedWriter writer = new BufferedWriter(new FileWriter(fileName));
+    Scanner scanner = new Scanner(System.in)) {
+if (scanner.hasNextLine())
+    writer.write(scanner.nextLine());
+}
+catch(IOException e) {
+    // handle the exception
+}
+```
+
+注意：**多资源会按照声明的相反顺序关闭**，上图例子中会先关闭Scanner，后关闭BufferedWriter。
+
+java 9 之后使用try-with-resource 没有必要在()中声明资源了
+
+```java
+BufferedWriter writer = new BufferedWriter(new FileWriter(fileName));
+try (writer) {
+  // do something with the file we've opened
+  writer.write(str);
+}
+catch(IOException e) {
+  // handle the exception
+}
+```
+
+**注意**：只自动关闭实现了 AutoCloseable 接口的资源**，想要自定义的资源被关闭要实现了AutoCloseable 接口并重写close()方法。
+
+## 合理的使用手动回滚
+
+Spring中@Transactional的使用
+
+```java
+@Transactional(rollbackFor = Exception.class)
+public void addUser(User user){
+  this.save(user);
+  //假如exception这个操作数据库的方法会抛出异常,方法save()对数据库的操作会回滚
+  exception();
+}
+```
+
+> 在@Transactional方法内使用try-catch捕获rollback的exception，会导致事务失效
+
+当我们希望在发生异常时做一些额外操作时，可以使用TransactionAspectSupport.currentTransactionStatus().rollbackToSavepoint(savePoint);手动回滚事务
+
+全部回滚：
+
+```java
+@Transactional(rollbackFor = Exception.class)
+public void addUser(User user) {
+    this.save(user);
+    try {
+        exception();
+    } catch (Exception e) {
+        log.info("add user error:{}",e.getMessage(),e);
+        //手工回滚异常
+        TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
+    }
+}
+```
+
+创建回滚点：
+
+```java
+@Transactional(rollbackFor = Exception.class)
+public void addUser(User user) {
+    this.save(user);
+    //设置回滚点,只回滚以下异常
+    Object savePoint = TransactionAspectSupport.currentTransactionStatus().createSavepoint();
+    userMapper.otherMethod(user);
+    try {
+      exception();
+    } catch (Exception e) {
+        log.info("add user error:{}",e.getMessage(),e);
+        //手工回滚异常,回滚到savePoint，userMapper.otherMethod(user)会回滚，而save方法不会回滚
+        TransactionAspectSupport.currentTransactionStatus().rollbackToSavepoint(savePoint);
+    }
+}
+```
