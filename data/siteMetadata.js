@@ -10,7 +10,7 @@ const siteMetadata = {
   siteLogo: '/static/images/site/logo.png',
   hero: '/static/images/site/hero.jpg',
   // 添加view on github时使用
-  // siteRepo: 'https://github.com/timlrx/tailwind-nextjs-starter-blog',
+  siteRepo: 'https://github.com/FengZhengHao-FZH/Blog',
   // mastodon: 'https://mastodon.social/@mastodonuser',
   // email: 'address@yoursite.com',
   // github: 'https://github.com',
@@ -52,7 +52,7 @@ const siteMetadata = {
     // https://vercel.com/docs/environment-variables
     // supported providers: giscus, utterances, disqus
     // 取消下行注释开启评论
-    // provider: 'giscus',
+    provider: 'giscus',
     giscusConfig: {
       // Visit the link below, and follow the steps in the 'configuration' section
       // https://giscus.app/
@@ -93,4 +93,4 @@ const siteMetadata = {
   },
 }
 
-module.exports = siteMetadata
+export default siteMetadata
