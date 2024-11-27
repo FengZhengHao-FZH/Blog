@@ -25,7 +25,7 @@ public class AddUserVO {
 传统的参数校验可能如下：
 
 ```java
-private String checkUser(AddUserVO addUserVO) {
+private String checkData(AddUserVO addUserVO) {
   if(StringUtils.isBlank(addUserVO.getName())) {
     return "姓名不能为空";
   }
@@ -36,7 +36,7 @@ private String checkUser(AddUserVO addUserVO) {
     return "年龄不能为空";
   }
   if(addUserVO.getAge() < 18) {
-    return "年龄需要大于18岁";
+    return "年龄需要大于等于18岁";
   }
   // 其他校验
 }

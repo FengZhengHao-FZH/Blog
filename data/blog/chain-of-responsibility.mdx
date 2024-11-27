@@ -180,7 +180,7 @@ public class SanGuoKill {
 		System.out.println("开始处理锦囊无中生有");
 		BuildHandler.Builder<TrickCard> builder = new BuildHandler.Builder<>();
 		builder.addHandler(new HuangYueYing(false))
-				.addHandler(new YuJi(true))
+				.addHandler(new YuJi(false))
 				.addHandler(new WoLong(true));
 
 		builder.build().handle(card);

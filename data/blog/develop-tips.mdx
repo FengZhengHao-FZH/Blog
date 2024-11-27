@@ -129,7 +129,7 @@ TRUNCATE TABLE table_name;
 4. TRUNCATE会释放磁盘空间。
 5. TRUNCATE无法条件删除数据，**使用时务必备份**。
 
-## 更优雅的关闭资源
+## 更优雅地关闭资源
 
 传统使用try-catch-finally关闭资源：
 
@@ -192,7 +192,7 @@ catch(IOException e) {
 
 **注意**：只自动关闭实现了 AutoCloseable 接口的资源**，想要自定义的资源被关闭要实现了AutoCloseable 接口并重写close()方法。
 
-## 合理的使用手动回滚
+## 合理地使用手动回滚
 
 Spring中@Transactional的使用
 
@@ -207,7 +207,7 @@ public void addUser(User user){
 
 > 在@Transactional方法内使用try-catch捕获rollback的exception，会导致事务失效
 
-当我们希望在发生异常时做一些额外操作时，可以使用TransactionAspectSupport.currentTransactionStatus().rollbackToSavepoint(savePoint);手动回滚事务
+当我们希望在发生异常时做一些额外操作时，可以使用TransactionAspectSupport类手动回滚事务
 
 全部回滚：
 

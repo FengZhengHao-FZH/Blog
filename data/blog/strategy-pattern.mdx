@@ -33,7 +33,7 @@ public class PaymentService {
 }
 
 enum PaymentType {
-    Credit, WECHAT, ALIPAY;
+    Credit, WECHAT, ALIPAY
 }
 
 ```
@@ -64,16 +64,25 @@ enum PaymentType {
 
 ### 完善配置文件
 
-配置对象存储服务，以oss为例
+配置对象存储服务，以oss为例：
 
-```
-<!-- oss-->
+首先引入自定义依赖和oss依赖
+
+```xml
+<!-- 自定义配置 -->
 <dependency>
-  <groupId>com.aliyun.oss</groupId>
-  <artifactId>aliyun-sdk-oss</artifactId>
-  <version>3.16.1</version>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-configuration-processor</artifactId>
+</dependency>
+<!--阿里云Oss对象存储-->
+<dependency>
+    <groupId>com.aliyun.oss</groupId>
+    <artifactId>aliyun-sdk-oss</artifactId>
+    <version>${oss.version}</version>
 </dependency>
 ```
+
+然后在配置文件中对oss进行配置
 
 ```yaml
 application:
@@ -94,27 +103,10 @@ application:
 ```
 
 > 可以使用@Value注解来获取配置
-> 
-> 在这里呢我们使用@ConfigurationProperties()的方式来获取配置文件的内容。
+>
+> 在这里我们使用@ConfigurationProperties()的方式来获取配置文件的内容。
 
-首先引入自定义依赖和oss依赖
 
-```xml
-<!-- 自定义配置 -->
-<dependency>
-  <groupId>org.springframework.boot</groupId>
-  <artifactId>spring-boot-configuration-processor</artifactId>
-</dependency>
-```
-
-```xml
-<!--阿里云Oss对象存储-->
-<dependency>
-    <groupId>com.aliyun.oss</groupId>
-    <artifactId>aliyun-sdk-oss</artifactId>
-    <version>${oss.version}</version>
-</dependency> 
-```
 
 
 > 定义properties实体类，通过@ConfigurationProperties()注解读取配置。
