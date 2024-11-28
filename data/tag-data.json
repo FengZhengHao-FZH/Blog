@@ -12,5 +12,6 @@
   "jsr303": 1,
   "mail": 1,
   "rabbitmq": 1,
-  "tips": 1
+  "tips": 1,
+  "algorithm": 1
 }
