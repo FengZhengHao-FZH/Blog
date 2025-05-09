@@ -4,6 +4,7 @@
   "design-patterns": 2,
   "gateway": 2,
   "nacos": 2,
+  "upload": 2,
   "spring cloud": 1,
   "xxl-job": 1,
   "transaction": 1,
@@ -12,6 +13,9 @@
   "jsr303": 1,
   "mail": 1,
   "rabbitmq": 1,
+  "rocketmq": 1,
+  "deepseek": 1,
+  "elasticsearch": 1,
   "tips": 1,
   "algorithm": 1
 }

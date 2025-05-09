@@ -1,0 +1,271 @@
+---
+title: '分片上传与分片下载的实现'
+date: 2025-04-07T12:11:25Z
+tags: ['upload']
+summary: '本文介绍了大文件传输场景下的分片上传与下载机制，涵盖秒传校验、并发传输、断点续传等核心功能实现原理。'
+layout: PostLayout
+bibliography: references-data.bib
+---
+
+## 分块上传
+
+### 一图浏览分块上传流程
+
+![sharded-upload.png](/static/images/blog/sharded-upload/sharded-upload.png)
+
+### 分块上传流程分析
+
+1. 客户端根据文件大下判断是否需要切片，具体的业务场景需要具体分析。
+2. 假设文件大小是500MB，那么前端将文件切为500MB/25MB=20个切片，并对这些切片进行编号，1-20。
+3. 调用预上传准备接口，携带完整文件的md5作为参数来判断文件是否已经存在。
+4. 服务器根据md5查询文件数据库（mysql或者redis都可以），检查是否有匹配该md5的文件，有则直接返回上传成功。
+5. 客户端并发上传这些切片，不要求有序上传。上传切片时，携带完整文件的md5和当前切片id作为参数。
+6. 服务器接收文件分块，把文件内容写入临时目录里，比如 /upload/temp/md5/。
+7. 客户端的所有切片全部上传成功后，调用服务器的分块合并接口，参数为md5、文件名filename、文件分块数。
+8. 服务器对/upload/temp/md5/里的按分块id顺序进行读取合并写入到一个新文件，校验合并好的文件MD5是否与客户端上传的md5一致。新文件命名为文件的md5，数据库写一条文件名映射文件路径的记录。 比如：test.mp4 -> /upload/md5.mp4
+
+### 代码编写
+
+#### 依赖和相关配置
+
+首先引入Redis的依赖
+
+```xml
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-starter-data-redis</artifactId>
+</dependency>
+```
+
+进行请求大小的配置和redis的配置：
+
+```yaml
+spring:
+  servlet:
+    # 设置请求文件大小和请求的大小
+    multipart:
+      max-file-size: 2GB
+      max-request-size: 2GB
+  redis:
+    host: localhost
+    port: 6379
+    password:
+```
+
+#### 分片上传接口
+
+思路是将文件转换为流，然后根据第几片和片大小来跳过并读取，然后保存为临时文件。
+
+```java
+@SneakyThrows
+public void uploadChunk(String fileMd5, String fileName, int chunkNumber, int chunkSize, MultipartFile file) {
+    Path chunkPath = Paths.get(TMP_FILE_PATH, fileMd5, fileName + "-" + chunkNumber + ".part");
+    Files.createDirectories(chunkPath.getParent());
+
+    long offset = (long) (chunkNumber - 1) * chunkSize;
+    log.info("{}-第{}块文件开始下载-实际文件块大小chunkSize: {}, 偏移量offset: {}", fileName, chunkNumber, chunkSize, offset);
+
+    try (InputStream inputStream = file.getInputStream();
+          OutputStream outputStream = Files.newOutputStream(chunkPath, StandardOpenOption.CREATE)) {
+        byte[] chunkData = new byte[chunkSize];
+        long skipped = inputStream.skip(offset);
+        log.info("{}-第{}块文件实际跳过{}字节", fileName, chunkNumber, skipped);
+        int bytesRead = inputStream.read(chunkData);
+        if (bytesRead > 0) {
+            outputStream.write(chunkData, 0, bytesRead);
+        }
+        log.info("{}-第{}块文件下载成功", fileName, chunkNumber);
+    } catch (IOException e) {
+        log.error("Failed to save chunk: {}", e.getMessage(), e);
+    }
+}
+```
+
+#### 文件合并接口
+
+当所有分块文件都上传完成后，调用合并接口，将分片文件合并为一个文件，主要分片文件读取顺序和md5校验。
+
+```java
+@SneakyThrows
+public void mergeChunks(String fileMd5, String fileName) {
+    log.info("{}-开始合并文件", fileName);
+    String finalFileName = fileMd5 + FileUtils.getFileType(fileName);
+    Path mergedPath = Paths.get(FILE_PATH, finalFileName);
+    Files.createDirectories(mergedPath.getParent());
+
+    try (OutputStream os = Files.newOutputStream(mergedPath, StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
+        for (int i = 1; ; i++) {
+            Path chunk = Paths.get(TMP_FILE_PATH, fileMd5, fileName + "-" + i + ".part");
+            if (!Files.exists(chunk)) break;
+            Files.copy(chunk, os);
+            Files.delete(chunk);
+        }
+    }
+    // 清理临时目录
+    Files.deleteIfExists(Paths.get(TMP_FILE_PATH, fileMd5));
+    log.info("{}-合并文件成功", fileName);
+    // 确认合并后的文件md5值与前端传过来的md5是否一致，需使用同一种算法
+    log.info("{}-文件md5: {}", fileName, FileUtils.getFileMD5(mergedPath.toFile()));
+    if (!fileMd5.equals(FileUtils.getFileMD5(mergedPath.toFile()))) {
+        log.error("{}-文件md5不一致", fileName);
+        Files.deleteIfExists(mergedPath);
+        return;
+    }
+    // 保存文件的基本信息
+    saveFileInfo(fileMd5, fileName, Files.size(mergedPath), mergedPath.toString());
+}
+```
+
+#### 查询上传进度
+
+根据md5值去遍历分片文件目录下的分片文件信息进行返回。
+
+```java
+@SneakyThrows
+public UploadProgress getUploadProgress(String fileMd5, String fileName) {
+    Path dir = Paths.get(TMP_FILE_PATH, fileMd5);
+    Map<String, Long> existingChunkMap = new LinkedHashMap<>();
+    AtomicLong totalExistedChunkSize = new AtomicLong(0L);
+
+    if (Files.exists(dir)) {
+        try (Stream<Path> stream = Files.list(dir)) {
+            // 获取已存在的分片文件
+            existingChunkMap = stream
+                    .filter(p -> p.getFileName().toString().startsWith(fileName))
+                    .peek(p -> totalExistedChunkSize.addAndGet(getChunkSize(p)))
+                    .collect(Collectors.toMap(
+                            p -> p.getFileName().toString(),
+                            this::getChunkSize,
+                            (a, b) -> a,
+                            LinkedHashMap::new
+                    ));
+        } catch (IOException e) {
+            log.error("Failed to list chunks:{}", e.getMessage(), e);
+        }
+    }
+    return UploadProgress.builder()
+            .fileName(fileName)
+            .fileMd5(fileMd5)
+            .existedChunkSize(totalExistedChunkSize.get())
+            .uploadedChunks(existingChunkMap)
+            .build();
+}
+```
+
+## 分片下载
+
+### 一图浏览分块上传流程
+
+![sharded-download.png](/static/images/blog/sharded-upload/sharded-download.png)
+
+### Range请求头
+
+MDN对Range请求头的定义如下：
+
+> Range 是一个请求首部，告知服务器返回文件的哪一部分。在一个 Range 首部中，可以一次性请求多个部分，服务器会以 multipart 文件的形式将其返回。如果服务器返回的是范围响应，需要使用 206 Partial Content 状态码。假如所请求的范围不合法，那么服务器会返回 416 Range Not Satisfiable 状态码，表示客户端错误。服务器允许忽略 Range 首部，从而返回整个文件，状态码用 200 。
+
+语法如下：
+
+```
+语法:
+Range: <unit>=<range-start>-
+Range: <unit>=<range-start>-<range-end>
+Range: <unit>=<range-start>-<range-end>, <range-start>-<range-end>
+
+示例:
+Range: bytes=200-1000, 2000-6576, 19000-
+```
+
+### 分片下载流程分析
+
+1. 客户端调用接口判断文件是否存在。
+2. 前端设置Range请求头，调用后端分片下载接口。
+3. 后端根据Range请求头信息返回分片文件。
+4. 全部分片下载完成后前端将分片文件合并。
+
+### 代码编写
+
+根据Range请求头，使用RandomAccessFile来跳过指定偏移量后下载分片文件。
+
+```java
+@SneakyThrows
+public void download(String fileMd5, String filePath, String fileName, HttpServletRequest request, HttpServletResponse response) {
+    File downloadFile = Paths.get(filePath).toFile();
+    if (!downloadFile.exists()) {
+        log.error("{}-文件不存在", fileName);
+        return;
+    }
+    if (!fileMd5.equals(FileUtils.getFileMD5(downloadFile))) {
+        log.error("{}-文件MD5不匹配", fileName);
+        return;
+    }
+    if (StringUtils.isBlank(fileName)) {
+        fileName = downloadFile.getName();
+    }
+    String headerValue = String.format("attachment; filename=\"%s\"", fileName);
+    response.addHeader(HttpHeaders.CONTENT_DISPOSITION, headerValue);
+    response.addHeader(HttpHeaders.ACCEPT_RANGES, "bytes");
+    // 获取文件大小
+    long downloadSize = downloadFile.length();
+    long fromPos = 0, toPos = 0;
+    if (request.getHeader("Range") == null) {
+        response.addHeader(HttpHeaders.CONTENT_LENGTH, downloadSize + "");
+    } else {
+        log.info("range:{}", response.getHeader("Range"));
+        // 如果为持续下载
+        response.setStatus(HttpStatus.PARTIAL_CONTENT.value());
+        String range = request.getHeader("Range");
+        String bytes = range.replaceAll("bytes=", "");
+        String[] ary = bytes.split("-");
+        fromPos = Long.parseLong(ary[0]);
+        log.info("fromPos:{}", fromPos);
+        if (ary.length == 2) {
+            toPos = Long.parseLong(ary[1]);
+        }
+        int size;
+        if (toPos > fromPos) {
+            size = (int) (toPos - fromPos);
+        } else {
+            size = (int) (downloadSize - fromPos);
+        }
+        response.addHeader(HttpHeaders.CONTENT_LENGTH, size + "");
+        downloadSize = size;
+    }
+
+    try (RandomAccessFile in = new RandomAccessFile(downloadFile, "rw");
+         OutputStream out = response.getOutputStream()) {
+        if (fromPos > 0) {
+            in.seek(fromPos);
+        }
+        int bufLen = (int) (downloadSize < 2048 ? downloadSize : 2048);
+        byte[] buffer = new byte[bufLen];
+        int num;
+        // 当前写入客户端大小
+        int count = 0;
+        while ((num = in.read(buffer)) != -1) {
+            out.write(buffer, 0, num);
+            count += num;
+            if (downloadSize - count < bufLen) {
+                bufLen = (int) (downloadSize - count);
+                if (bufLen == 0) {
+                    break;
+                }
+                buffer = new byte[bufLen];
+            }
+        }
+        response.flushBuffer();
+    } catch (IOException e) {
+        log.error("download error:{}", e.getMessage(), e);
+        throw new RuntimeException("文件下载失败", e);
+    }
+}
+```
+
+## 后记
+
+实际开发过程中，推荐使用OSS等对象存储服务，功能更加强大，[OSS断点续传文档](https://help.aliyun.com/zh/oss/developer-reference/resumable-upload-10?spm=a2c4g.11186623.help-menu-31815.d_5_3_1_3_0_3.19b77d4dDoNXLC&scm=20140722.H_84785._.OR_help-T_cn~zh-V_1)。
+
+## 参考
+
+[大文件分块上传](https://zhuanlan.zhihu.com/p/666360928)
+

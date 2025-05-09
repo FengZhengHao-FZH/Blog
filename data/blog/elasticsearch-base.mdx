@@ -1,0 +1,576 @@
+---
+title: 'ElasticSearch：数据的“搜索引擎”之旅'
+date: 2025-04-29T18:12:25Z
+tags: ['elasticsearch']
+summary: '本文详细介绍了ElasticSearch的基本概念、安装方法、基础语法以及与Spring Boot的集成技巧。'
+layout: PostLayout
+bibliography: references-data.bib
+---
+## 引言
+
+在当今数据驱动的世界中，快速、准确地检索海量信息变得尤为重要。ElasticSearch（简称ES）作为一款强大的分布式搜索和分析引擎，已经成为许多企业和开发者处理复杂查询和实时数据分析的首选工具。本文将带你深入了解ElasticSearch的核心概念，帮助你掌握其安装、基础语法以及与Spring Boot的集成。
+
+## 什么是ElasticSearch？
+
+### 数据的“搜索引擎”
+
+ElasticSearch是一个基于Apache Lucene构建的开源搜索引擎，它不仅能够高效地存储和索引数据，还支持复杂的全文搜索和实时数据分析。想象一下，如果你有一座图书馆，里面存放着数百万本书籍，而你需要快速找到某本书中的某个关键词，ElasticSearch就是那个帮你迅速定位的“图书管理员”。
+
+### 核心特性
+
+1. **分布式架构**
+ElasticSearch天生支持分布式部署，可以轻松扩展到数百台服务器，处理PB级的数据。
+2. **实时性**
+数据写入后几乎立即可被搜索到，非常适合需要实时反馈的应用场景。
+3. **RESTful API**
+提供简单易用的HTTP接口，开发者可以通过JSON格式与ElasticSearch交互。
+4. **灵活的查询语言**
+支持结构化查询、全文搜索、地理空间查询等多种方式，满足不同需求。
+5. **插件丰富**
+可以通过插件扩展功能，例如analysis-ik用于中文分词分析。
+
+### 核心原理
+
+#### 正向索引
+
+假设有一个表，结构和内容如下：
+
+|id|product_name|price|
+|--|--|--|
+|1	|小米15	|3699|
+|2	|华为mate70	|6499|
+|3	|华为耳机FreeBuds pro 3|919|
+|4|小米手环9	|239|
+
+实际应用场景里，用户并不知道每一个商品的id，只知道商品名称，所以对于用户的查询方式，是对商品名称做模糊查询，只能是逐行扫描数据。
+
+```sql
+select id, title, price from tb_product where prodct_name like %手机%
+```
+
+#### 倒排索引
+
+而倒排索引的概念是基于MySQL这样的正向索引而言的。
+
+倒排索引中有两个非常重要的概念
+
+- 文档(Document)：用来搜索的数据，其中的每一条数据就是一个文档。
+- 词条(Term)：对文档数据或用户搜索数据，利用某种算法分词，得到的具备含义的词语就是词条。例如：我最喜欢的FPS游戏是Csgo，就可以分为我、我最喜欢、FPS游戏、最喜欢的FPS、Apex这样的几个词条
+
+创建倒排索引是对正向索引的一种特殊处理，流程如下
+
+1. 将每一个文档的数据利用算法分词，得到一个个词条
+2. 创建表，每行数据包括词条、词条所在文档id、位置等信息
+3. 因为词条唯一性，可以给词条创建索引，例如hash表结构索引
+
+由此，可以构建出一个倒排索引的表：
+
+|分词|文档id|
+|--|--|
+|小米|1,4|
+|华为|2,3|
+|耳机|3|
+|手环|4|
+
+假如用户输入条件”华为手机“进行搜索，处理的流程将会如下：
+
+1. 对用户输入的内容分词，得到词条：华为、手机。
+2. 拿着词条在倒排索引中查找，可以得到包含词条的文档id为：2、3。
+3. 拿着文档id到正向索引中查找具体文档。
+
+虽然要先查询倒排索引，再查询正向索引，但是无论是词条还是文档id，都建立了索引，所以查询速度非常快，无需全表扫描，这也是EasticSearch搜索快的原因。
+
+## ElasticSearch的安装与启动
+
+### ElasticSearch安装步骤
+
+1. **下载ElasticSearch**
+访问[官方下载页面](https://www.elastic.co/downloads/elasticsearch)，选择适合你操作系统的版本并下载。
+2. **解压文件**
+将下载的压缩包解压到目标目录。
+3. **配置环境变量（可选）**
+如果希望全局使用ElasticSearch命令，可以将其bin目录添加到PATH环境变量中。
+4. **启动服务**
+进入安装目录运行以下命令启动ElasticSearch：
+   ```sh
+   ./bin/elasticsearch
+   ```
+
+   默认情况下，ElasticSearch会在`localhost:9200`上运行。
+
+   注意：在ElasticSearch 7.10 后默认开启了 x-pack 验证，具体配置项在ElasticSearch安装目录的config文件夹中的elasticsearch.yml文件中的`xpack.security.enabled: true`配置项。默认账号为elastic，首次启动会控制台会显示默认密码。
+
+   如果默认密码无法找到，进入安装目录运行以下命令控制台会重新生成并显示默认密码：
+   ```
+   elasticsearch-reset-password -u elastic
+   ```
+
+### 验证安装
+
+打开浏览器访问`https://localhost:9200`，如果看到类似以下的JSON响应，则表示安装成功：
+
+```json
+{
+  "name": "hostname",
+  "cluster_name": "elasticsearch",
+  "cluster_uuid": "uuid",
+  "version": {
+    "number": "8.18.0",
+    "build_flavor": "default",
+    "build_type": "zip",
+    "build_hash": "04e979aa50b657bebd4a0937389308de82c2bdad",
+    "build_date": "2025-04-10T10:09:16.444104780Z",
+    "build_snapshot": false,
+    "lucene_version": "9.12.1",
+    "minimum_wire_compatibility_version": "7.17.0",
+    "minimum_index_compatibility_version": "7.0.0"
+  },
+  "tagline": "You Know, for Search"
+}
+```
+
+### 请求ElasticSearch
+
+#### 通过Http请求访问
+
+ElasticSearch支持RESTful API，可以通过Http请求进行访问，例如我们使用如下curl命令可以查看所有的索引的基本信息：
+
+```
+curl -X GET 'https://localhost:9200/_cat/indices?v' --insecure -H 'authorization: Basic base64'
+```
+
+也可以使用PostMan等API工具进行访问：
+
+```
+GET https://localhost:9200/_cat/indices?v
+```
+
+注意：在开启x-pack 验证后，请求需要设置身份验证，这里使用简单的Basic 认证模式，将账号密码按照`username:password`这种格式后进行Base64加密。请求时，添加Authorization请求头，格式为 Basic base64。
+
+#### 可视化工具
+
+在这里推荐DocKit，访问[dockit官网](https://dockit.geekfun.club/)进行下载。
+
+## 插件analysis-ik分词器
+
+### analysis-ik分词器的作用
+
+IK 分词器 是一个专门为中文设计的分词插件，用于在 ElasticSearch 中对中文文本进行更精确的分词处理。它提供了两种分词模式：
+
+- ik_smart：智能分词模式，尽量将文本分成较大的词语。
+- ik_max_word：最细粒度分词模式，尽可能多地切分出词语。
+
+### 安装
+
+- 方法一：在ElasticSearch的安装目录运行：
+  ```
+  ./bin/elasticsearch-plugin install https://github.com/medcl/elasticsearch-analysis-ik/releases/download/v8.x.x/elasticsearch-analysis-ik-8.x.x.zip
+  # 注意要与ElasticSearch的版本对对应。
+  # 这个方法下载可能会偏慢。
+  ```
+
+- 方法二：  [官方归档](https://release.infinilabs.com/analysis-ik/stable/)，下载与ElasticSearch对应的版本，解压后放在ElasticSearch的安装目录下的plugins目录下。
+
+### 验证安装
+
+重启ElasticSearch后，运行如下命令：
+
+```
+POST _analyze
+{
+  "analyzer": "standard",
+  "text": "海狸能在水下停留多长时间而不浮出水面？",
+}
+
+POST _analyze
+{
+  "analyzer": "ik_smart",
+  "text": "海狸能在水下停留多长时间而不浮出水面？"
+}
+
+POST _analyze
+{
+  "analyzer": "ik_max_word",
+  "text": "海狸能在水下停留多长时间而不浮出水面？"
+}
+```
+
+可以发现，默认的分词器并不能很好的处理中文的，而ik_smart 和 ik_max_word分词器能很好的处理中文，ik_max_word会切分出更细的词语。
+
+### 自定义字典
+
+当业务场景里包含很多专业术语，如医药领域时，即使是analysis-ik也不能很好的针对文本进行分词。此时，我们可以自定义字典来进行分词，步骤如下：
+
+1. 创建my.dic字典文件并添加分词数据。
+2. 编辑analysis-ik的IKAnalyzer.cfg.xml文件，配置`<entry key="ext_dict">my.dic</entry>`
+
+当业务场景中有有很多语气词或连词等，我们并不希望被搜索出来。此时，我们可以自定义不分词字典，步骤如下：
+
+1. 新建ext_stopwords.dic字典文件并添加不希望分词的数据。
+2. 编辑analysis-ik的IKAnalyzer.cfg.xml文件，配置`<entry key="ext_stopwords">ext_stopwords.dic</entry>`
+
+完成后重启ElasticSearch，重新对文本进行分词分析就会发现分词器认识了my.dic中的分词，而没有分出ext_stopwords.dic中的分词。
+
+## ElasticSearch的基础语法
+
+### 索引管理
+
+ElasticSearch中的数据存储在索引中，类似于数据库中的表。以下是常用的索引操作：
+
+#### 创建索引
+
+```
+PUT /my_index
+{
+  "settings": {
+    "number_of_shards": 1, // 一个分片
+    "number_of_replicas": 1 // 一个副本
+  },
+  "mappings": {
+    "properties": {
+      "title": {
+        "type": "text"
+      },
+      "content": {
+        "type": "text"
+      },
+      "author": {
+        "type": "text",
+        "analyzer": "ik_max_word"// 指定分词器
+      }
+    }
+  }
+}
+```
+
+推荐通过插入数据的形式创建索引。
+
+#### 删除索引
+
+```sh
+DELETE /my_index
+```
+
+#### 查看索引
+
+查看所有索引的基本信息：
+
+```sh
+GET /_cat/indices?v
+```
+
+#### 查询索引结构
+
+查看Elasticsearch中某个索引的结构：
+
+```
+GET /索引名/_mapping?pretty
+```
+
+### 文档操作
+
+文档是ElasticSearch中的基本数据单元，类似于数据库中的记录。
+
+#### 插入文档
+
+如果my_index索引不存在，会自动创建索引。
+
+```sh
+POST /my_index/_doc/1
+{
+  "title": "Elasticsearch入门",
+  "content": "学习Elasticsearch的基本概念和操作。",
+  "author": "张三",
+  "liked": 10
+}
+```
+
+#### 查询文档
+
+根据文档id查询文档内容：
+
+```sh
+GET /my_index/_doc/1
+```
+
+#### 更新文档
+
+```sh
+POST /my_index/_update/1
+{
+  "doc": {
+    "content": "更新后的文档内容"
+  }
+}
+```
+
+#### 删除文档
+
+```sh
+DELETE /my_index/_doc/1
+```
+
+### 搜索查询
+
+ElasticSearch提供了丰富的查询DSL（Domain Specific Language），可以实现复杂的搜索需求。
+
+```sh
+// 查询所有文档
+GET /my_index/_search
+// 查询name为张三的的文档
+GET /my_index/_search?q=author:张三
+// 查询content包含Elasticsearch的文档
+GET /my_index/_search
+{
+  "query": {
+    "match": {
+      "content": "Elasticsearch"
+    }
+  }
+}
+// 分页和排序
+GET /my_index/_search
+{
+  "query":{
+    "match": {
+      "name": "Elasticsearch"
+    }
+  },
+  "_source":["author","title"],// 只返回部分字段
+  "sort": [
+    {
+      "liked": {
+        "order": "desc" /注意:在排序的过程中，只能使用数字日期
+      }
+    }
+  ],
+  "from":0,
+  "size":2
+}
+// 匹配多个字段
+GET /my_index/_search
+{
+  "query": {
+    "multi_match": {
+      "query": "Elasticsearch",
+      "fields": ["title", "content"]
+    }
+  }
+}
+```
+
+关于更多更复杂查询的DSL语法，[Elastic查询语法](https://www.elastic.co/guide/en/elasticsearch/reference/8.18/query-dsl.html)
+
+#### Elasticsearch SQL查询插件
+
+Elasticsearch SQL是一个X-Pack组件，它允许针对Elasticsearch实时执行类似SQL的查询。可以将Elasticsearch SQL看作是一种翻译器，它可以将SQL翻译成Query DSL。
+
+```sh
+POST /_sql?format=txt
+{
+  "query": "SELECT * from my_index where author = '张三' and content like '%学习%'"
+}
+
+POST /_sql?format=txt
+{
+  "query": "SELECT author,count(1) from my_index group by author "
+}
+
+POST /_sql/translate
+{
+  "query": "SELECT * from my_index where author = '张三' and content like '%学习%'"
+}
+```
+
+## Spring Boot集成ElasticSearch
+
+随着微服务架构的普及，越来越多的开发者选择将ElasticSearch与Spring Boot结合使用，以简化开发流程并提升性能。
+
+### 添加依赖
+
+在`pom.xml`中添加ElasticSearch的依赖：
+
+```xml
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-elasticsearch</artifactId>
+</dependency>
+```
+
+### 配置连接
+
+在`application.yml`中配置ElasticSearch的连接信息：
+
+```yaml
+spring:
+  elasticsearch:
+    uris: "https://localhost:9200"
+    username: "elastic"
+    password: "********"
+```
+
+### 证书配置
+
+因为Elasticsearch8.x版本默认启用了安全功能，包括TLS加密。为了确保数据在网络传输中为加密传输，需要通过配置SSL证书，并启用HTTPS访问。
+
+为了方便测试，这里选择跳过SSL认证。
+
+```java
+@Component
+public class RestClientBuilderCustomizerImpl implements RestClientBuilderCustomizer {
+
+    @Override
+    public void customize(RestClientBuilder builder) {
+
+    }
+
+    /**
+     * 在这里加入自定义逻辑，比如跳过SSL的证书检查和hostname检查
+     */
+    @Override
+    public void customize(HttpAsyncClientBuilder builder) {
+        SSLContextBuilder sscb = SSLContexts.custom();
+        try {
+            sscb.loadTrustMaterial((chain, authType) -> {
+                // 在这里跳过证书信息校验
+                // System.out.println("暂时isTrusted|" + authType + "|" + Arrays.toString(chain));
+                return true;
+            });
+        } catch (NoSuchAlgorithmException | KeyStoreException e) {
+            e.printStackTrace();
+        }
+        try {
+            builder.setSSLContext(sscb.build());
+        } catch (KeyManagementException | NoSuchAlgorithmException e) {
+            e.printStackTrace();
+        }
+        // 这里跳过主机名称校验
+        builder.setSSLHostnameVerifier(NoopHostnameVerifier.INSTANCE);
+    }
+}
+```
+
+### 创建实体类
+
+定义一个与ElasticSearch索引对应的实体类：
+
+```java
+import org.springframework.data.annotation.Id;
+import org.springframework.data.elasticsearch.annotations.Document;
+
+@Document(indexName = "article")
+public class Article {
+    @Id
+    private Integer id;
+    private String title;
+    private String content;
+    private String author;
+    private List<String> tags;
+    private Integer liked;
+
+    // Getters and Setters
+}
+```
+
+### 编写Repository接口
+
+利用Spring Data Elasticsearch提供的CRUD功能：
+
+```java
+import org.springframework.data.elasticsearch.repository.ElasticsearchRepository;
+
+public interface ArticleRepository extends ElasticsearchRepository<Article, Integer> {
+    List<Article> findByContentContaining(String keyword);
+}
+```
+
+### 测试查询
+
+编写一个简单的控制器来测试查询功能：
+
+```java
+@Slf4j
+@RestController
+@RequestMapping("/elastic/article")
+public class ElasticArticleController {
+
+    @Resource
+    private ElasticArticleRepository elasticArticleRepository;
+
+    @GetMapping("/list")
+    public List<Article> listArticle() {
+        // 迭代器转list
+        List<Article> articleList = new ArrayList<>();
+        elasticArticleRepository.findAll().forEach(articleList::add);
+        return articleList;
+    }
+
+    @GetMapping("/{id}")
+    public Article getArticleById(@PathVariable Integer id) {
+        return elasticArticleRepository.findById(id).get();
+    }
+
+    @PostMapping("/save")
+    public Article saveArticle(@RequestBody Article article) {
+        return elasticArticleRepository.save(article);
+    }
+
+    @PostMapping("/delete")
+    public void deleteArticle(@RequestParam Integer id) {
+        elasticArticleRepository.deleteById(id);
+    }
+
+    @PostMapping("/update")
+    public Article updateArticle(@RequestBody Article article) {
+        return elasticArticleRepository.save(article);
+    }
+
+    @GetMapping("/queryByTitle")
+    public List<Article> queryByTitle(@RequestParam String title) {
+        return elasticArticleRepository.findByTitle(title);
+    }
+
+    // 推荐CRUD也使用ElasticsearchTemplate
+    @Resource
+    private ElasticsearchTemplate elasticsearchTemplate;
+
+    @GetMapping("/queryByKeyword")
+    public List<Article> queryByKeyword(@RequestParam String keyword) {
+        Criteria criteria = new Criteria()
+                .or("title").is(keyword)
+                .or("content").is(keyword)
+                .or("tags").is(keyword);
+        CriteriaQuery query = new CriteriaQuery(criteria);
+        // 注意排序字段的选择，只能是数字和日期，否则会报错
+        // query.addSort(Sort.by("id").descending());
+        query.setPageable(PageRequest.of(0, 10).withSort(Sort.by("liked").ascending()));
+        return elasticsearchTemplate.search(query, Article.class).stream().map(SearchHit::getContent).toList();
+    }
+
+    // 根据作者分组统计
+    @GetMapping("/groupByAuthor")
+    public Object groupByAuthor() {
+        NativeQuery query = NativeQuery.builder()
+                .withAggregation("groupByAuthor", Aggregation.of(a -> a.terms(t -> t.field("author.keyword").size(1000))))
+                .build();
+        SearchHits<Article> searchHits = elasticsearchTemplate.search(query, Article.class);
+        ElasticsearchAggregations aggregations = (ElasticsearchAggregations) searchHits.getAggregations();
+        StringTermsAggregate aggregate = (StringTermsAggregate) aggregations.get("groupByAuthor").aggregation().getAggregate()._get();
+        return aggregate.buckets().array().stream().map(b -> Map.of(
+                "author", b.key().stringValue(),
+                "count", b.docCount()
+        )).toList();
+
+    }
+
+    // 删除索引
+    @GetMapping("/deleteIndex")
+    public void deleteIndex() {
+        elasticsearchTemplate.indexOps(Article.class).delete();
+    }
+}
+```
+
+## 总结
+
+ElasticSearch是一款功能强大且灵活的搜索引擎，无论是用于日志分析、电商推荐还是实时数据分析，都能提供卓越的性能和用户体验。通过本文的学习，你已经掌握了ElasticSearch的基本概念、安装方法、基础语法以及与Spring Boot的集成技巧。

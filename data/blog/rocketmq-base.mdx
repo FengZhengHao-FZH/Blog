@@ -1,0 +1,436 @@
+---
+title: '🚀 RocketMQ 基本用法详解'
+date: 2025-05-09T17:11:25Z
+tags: ['rocketmq']
+summary: 'RocketMQ 是一款强大的分布式消息中间件，广泛应用于企业级系统中。本文介绍了其基本概念、核心功能、Spring Boot 集成方式。'
+layout: PostLayout
+bibliography: references-data.bib
+---
+
+## 🚀 什么是 RocketMQ？
+
+RocketMQ 是阿里巴巴开源的分布式消息中间件，具有高可用性、高性能和可扩展性。它支持多种消息模型，包括：
+
+- **点对点（P2P）**
+- **发布/订阅（Pub/Sub）**
+
+适用于大规模数据处理和实时通信场景。
+
+## 🔍 RocketMQ 的特点
+
+|特性|描述|
+|--|--|
+|⚡ 高吞吐量|支持每秒数十万条消息的处理|
+|🛡️ 高可用性|主从架构 + Dledger 集群保障可靠性|
+|🧩 灵活的消息模式|支持 P2P 和 Pub/Sub 模式|
+|📅 顺序消息|支持严格的消息顺序消费|
+|💰 事务消息|支持分布式事务一致性|
+|🌐 多语言支持|提供 Java、C++、Python 等客户端|
+
+## 🎯 应用场景
+
+|场景|说明|
+|--|--|
+|🔄 异步处理|将耗时操作异步化，提升系统响应速度|
+|🔗 应用解耦|解耦生产者与消费者，提高系统灵活性|
+|📈 流量削峰|在高并发下平滑流量波动，防止系统崩溃|
+|📊 日志处理|收集和分析分布式系统的日志信息|
+|📨 消息通讯|实现服务间可靠的消息传递|
+
+## 🧱 RocketMQ 架构解析
+
+### 🏗️ 核心组件
+
+|组件|功能|
+|--|--|
+|📡 NameServer|路由管理器，负责 Topic 路由信息维护|
+|🖥️ Broker|消息中转站，负责消息的存储与转发|
+|📤 Producer|消息生产者，将消息发送到 Broker|
+|📥 Consumer|消息消费者，拉取消息进行处理|
+
+### 🔄 工作流程
+
+![rocketmq-workflow.png](/static/images/blog/rocketmq-base/rocketmq-workflow.png)
+
+1. 启动 NameServer
+2. Broker 注册到 NameServer
+3. Producer 获取路由信息并发送消息
+4. Consumer 获取路由信息并拉取消息
+
+### 🔒 高可用机制
+
+|类型|描述|
+|--|--|
+|🔄 主从架构|Master 故障时 Slave 接管|
+|🤝 Dledger 集群|基于 Raft 协议实现自动选举和数据同步|
+
+### 🧠 核心功能一览
+
+|功能|说明|
+|--|--|
+|✉️ 消息发送方式|同步、异步、Oneway|
+|📦 顺序消息|保证消息消费顺序一致|
+|💳 事务消息|支持本地事务提交/回滚|
+|⏰ 定时消息|支持延迟投递|
+|🔓 死信队列|自动隔离多次消费失败的消息|
+
+## ✉️消息的分组
+
+|概念|中文解释|主要作用|
+|--|--|--|
+|Topic|主题|消息的一级分类，表示一类消息。Producer 发送到 Topic，Consumer 订阅 Topic 来消费消息。|
+|Tag|标签 / 子主题|Topic 下的细分标签，用于对同一 Topic 内的消息做进一步过滤。Consumer 可以选择只消费某个 Tag 的消息。|
+|Group|组 / 消费者组|Producer 或 Consumer 所属的组。用于实现负载均衡、故障转移等机制。相同组内的 Consumer 共同消费消息（点对点模式），不同组则广播消费（发布订阅模式）。|
+
+### 🧩 三者关系说明
+
+- **Topic 是消息的大类**，比如订单系统消息、用户系统消息。
+- **Tag 是 Topic 下的小类**，比如订单系统的“创建”、“支付”、“关闭”事件。
+- **Group 是逻辑分组**，用来管理生产者或消费者的协同行为。
+
+### 📌 使用场景示例
+
+假设我们有一个订单系统：
+
+|类型|名称|说明|
+|--|--|--|
+|Topic|`OrderTopic`|表示所有订单相关的消息|
+|Tag|`OrderCreate`, `OrderPay`|分别表示订单创建和订单支付的事件|
+|Group|`OrderProducerGroup`|所有发送订单消息的 Producer 属于该组|
+|Group|`OrderConsumerGroupA`|一组消费者，负责处理订单创建事件|
+|Group|`OrderConsumerGroupB`|另一组消费者，可能负责处理订单支付事件|
+
+## 📦 下载与安装
+
+### 📥 下载地址
+
+🔗 [RocketMQ 官网下载页](https://rocketmq.apache.org/download/)
+
+### 🛠️ 安装步骤
+
+#### 启动 NameServer
+
+```sh
+# windows 
+start mqnamesrv.bat
+# linux
+nohup mqnamesrv &
+```
+
+#### 启动 Broker（Linux）
+
+```sh
+# windows
+start mqbroker.cmd -n 127.0.0.1:9876 autoCreateTopicEnable=true
+# linux
+nohup mqbroker -n localhost:9876 &
+```
+
+> ✅ 默认端口：NameServer `9876`，Broker `10911`
+> 
+> 如果你有多个 NameServer，可以用逗号分隔它们的地址。
+
+### 📺️可视化
+
+参考[RocketMQ Dashboard](https://rocketmq.apache.org/zh/docs/deploymentOperations/04Dashboard/)官方文档进行安装。
+
+## 🧑‍💻 Spring Boot 接入 RocketMQ
+
+### 📦 添加依赖（Maven）
+
+```xml
+<dependency>
+    <groupId>org.apache.rocketmq</groupId>
+    <artifactId>rocketmq-spring-boot-starter</artifactId>
+    <version>2.3.3</version>
+</dependency>
+```
+
+### 🛠️ 配置文件（application.yml）
+
+```yaml
+rocketmq:
+  name-server: localhost:9876  # NameServer 地址，集群使用';'隔开
+  producer:
+    group: my-producer-group  # 生产者组名称
+    send-message-timeout: 3000
+    retry-times-when-send-failed: 2
+    retry-next-server: true
+#    access-key: RocketMQ    # 若启用了 ACL 功能
+#    secret-key: 12345678    # 若启用了 ACL 功能
+  consumer:
+    group: default-consumer-group  # 消费者组名称
+    topic: default-topic  # 订阅的主题
+#    access-key: RocketMQ    # 若启用了 ACL 功能
+#    secret-key: 12345678    # 若启用了 ACL 功能
+```
+
+### 📨 发送简单消息
+
+#### ✅ 生产者代码
+
+```java
+@Autowired
+private RocketMQTemplate rocketMQTemplate;
+
+public void sendMessage(String message) {
+    rocketMQTemplate.convertAndSend("test-topic", message);
+    System.out.println("✅ Message sent: " + message);
+}
+```
+
+#### 👂 消费者代码
+
+```java
+@Service
+@RocketMQMessageListener(topic = "test-topic", consumerGroup = "my-consumer-group")
+public class SimpleConsumer implements RocketMQListener<String> {
+    @Override
+    public void onMessage(String message) {
+        System.out.println("📬 Received message: " + message);
+    }
+}
+```
+
+### 🧬 序列化消息（对象传输）
+
+#### 📦 示例类
+
+```java
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class Order {
+    private String id;
+    private BigDecimal amount;
+}
+```
+
+#### 📥 消费者监听对象类型
+
+```java
+// 指定泛型
+@Component
+@RocketMQMessageListener(topic = "order-topic", consumerGroup = "order-consumer-group")
+public class OrderConsumer implements RocketMQListener<Order> {
+    @Override
+    public void onMessage(Order order) {
+        System.out.println("📦 Received order: " + order);
+    }
+}
+```
+
+### 🏷️ 带 Tag 的消息
+
+#### 📤 发送带 Tag 的消息
+
+```java
+rocketMQTemplate.convertAndSend("tag-topic:test-tag1", "Hello Tag1");
+rocketMQTemplate.convertAndSend("tag-topic:test-tag2", "Hello Tag2");
+```
+
+#### 👂 监听特定 Tag 的消费者
+
+```java
+// 默认 selectorType为Tag模式
+// 默认 selectorExpression = "*"，表示会消费指定 topic 下的所有消息，
+@Component
+@RocketMQMessageListener(
+    topic = "tag-topic",
+    consumerGroup = "tag-consumer-tag1-group",
+    selectorExpression = "test-tag1"// 指定selectorExpression
+)
+public class Tag1Consumer implements RocketMQListener<String> {
+    @Override
+    public void onMessage(String msg) {
+        System.out.println("🏷️ Tag1 received: " + msg);
+    }
+}
+```
+### 🔁异步消息
+
+上文的消息均是**同步消息（Sync Message）**，RocketMQ 中的 **同步消息（Sync Message）** 和 **异步消息（Async Message）** 是两种不同的消息发送方式，它们在使用场景、可靠性、性能等方面有明显区别。
+
+#### ✅ 同步消息（Sync Message）
+
+##### 📌 定义：
+
+发送消息后，**必须等待 Broker 返回发送结果（成功或失败）**，才能继续执行后续逻辑。
+
+##### 🧩 示例代码：
+
+```java
+rocketMQTemplate.convertAndSend("test-topic", message);
+```
+
+#### ✅ 异步消息（Async Message）
+
+##### 📌 定义：
+
+- 发送消息后，**不等待 Broker 返回结果，直接继续执行后续逻辑**。
+- Broker 会在后台**异步处理并回调通知发送结果**。
+
+##### 🧩 示例代码：
+
+```java
+rocketMQTemplate.asyncSend("test-topic", message, new SendCallback() {
+    @Override
+    public void onSuccess(SendResult sendResult) {
+        System.out.println("Async message sent: " + message);
+    }
+
+    @Override
+    public void onException(Throwable e) {
+        System.out.println("Async message error: " + e);
+    }
+});
+System.out.println("Async Message sent: " + message);
+```
+
+### ➡️oneway消息
+
+`oneway` 消息是 RocketMQ 中的第三种消息发送方式，它和同步、异步不同，**是一种“只管发，不管结果”的轻量级发送模式**。
+
+#### ✅ 什么是 `oneway` 消息？
+
+- 发送方将消息写入网络后立即返回，**不等待 Broker 的响应**。
+- **也不支持回调**（既没有成功也没有失败的回调）。
+- 消息是否被 Broker 接收，发送端完全不知道。
+
+#### 🧩 示例代码：
+
+```java
+rocketMQTemplate.sendOneWay("test-topic", message);
+```
+
+### 🚦 消息发送方式对比
+
+|对比项	|同步消息	|异步消息	|Oneway 消息	 |
+|--|--|--|--|
+|是否等待响应|✅ 是|❌ 否|❌ 否|
+|是否有回调|❌ 否|✅ 成功/异常回调|❌ 否|
+|可靠性|✅ 高|⚠️ 中等（可能重试）|❌ 最低|
+|性能|⛔ 较低|✅ 高|✅ 极高 |
+|适用场景|🗝️关键业务|📫非关键但要反馈|🚮允许丢消息的场景|
+
+### 📅 定时消息
+
+```java
+// 延时等级：RocketMq现版本并不支持任意时间的延时，只可以设置几个固定的延时等级
+// 从1s到2h分别对应着等级 1 到 18，消息消费失败会进入延时消息队列
+// 1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 10m 20m 30m 1h 2h
+int delayLevel = 3;
+rocketMQTemplate.convertAndSend("delay-topic", MessageBuilder.withPayload("Delayed Msg").build(), delayLevel);
+```
+
+### 💳事务消息
+
+假设我们要实现一个订单服务，在下单成功后发送一条库存扣减的消息，并且要保证：
+
+- 下单失败 → 不发送消息
+- 下单成功但消息发送失败 → 回滚订单（或重试）
+
+#### 📤 发送事务消息
+
+```java
+String transactionId = "order-create-id-" + order.getId();
+TransactionSendResult result = rocketMQTemplate.sendMessageInTransaction("test-topic-trans", MessageBuilder.withPayload(order)
+    .setHeader(RocketMQHeaders.TRANSACTION_ID, transactionId)
+    .build(), order);
+System.out.println("Transaction message sent: " + order );
+System.out.println("Transaction message result: " + result);
+```
+
+#### ⚙️事务监听器
+
+```java
+@Component
+@RocketMQTransactionListener
+public class OrderTransactionListener implements RocketMQLocalTransactionListener {
+
+    // 存储本地事务状态（实际应持久化或用 Redis）
+    private final ConcurrentHashMap<String, RocketMQLocalTransactionState> transactionMap = new ConcurrentHashMap<>();
+
+    @Override
+    public RocketMQLocalTransactionState executeLocalTransaction(Message msg, Object arg) {
+        String transactionId = (String) msg.getHeaders().get(RocketMQHeaders.TRANSACTION_ID);
+        System.out.println("Order Transaction ID: " + transactionId);
+
+        try {
+            // 执行订单相关本地事务逻辑
+            boolean success = saveOrderToDB(transactionId);
+            if (success) {
+                transactionMap.put(transactionId, RocketMQLocalTransactionState.COMMIT);
+                return RocketMQLocalTransactionState.COMMIT;
+            } else {
+                transactionMap.put(transactionId, RocketMQLocalTransactionState.ROLLBACK);
+                return RocketMQLocalTransactionState.ROLLBACK;
+            }
+        } catch (Exception e) {
+            transactionMap.put(transactionId, RocketMQLocalTransactionState.UNKNOWN);
+            return RocketMQLocalTransactionState.UNKNOWN;
+        }
+    }
+
+    @Override
+    public RocketMQLocalTransactionState checkLocalTransaction(Message msg) {
+        String transactionId = (String) msg.getHeaders().get(RocketMQHeaders.TRANSACTION_ID);
+        return transactionMap.getOrDefault(transactionId, RocketMQLocalTransactionState.ROLLBACK);
+    }
+
+    private boolean saveOrderToDB(String orderId) {
+        // 模拟保存订单到数据库
+        System.out.println("Saving order to DB: " + orderId);
+        return true; // 可改为 false 测试回滚
+    }
+}
+```
+
+### 📋 顺序消息（Orderly）
+
+#### 📤 发送有序消息
+
+```java
+// shardingKey相同，这些消息将顺序地发送到同一个队列，如果只有一个消费者的话，这将实现全局有序
+String shardingKey = "shardingKey";
+for (int i = 0; i < 10; i++) {
+    String msg = "Order update " + i;
+    rocketMQTemplate.syncSendOrderly("order-topic", msg, shardingKey);
+    System.out.println("📦 Sent orderly: " + msg);
+}
+// shardingKey不相同，这些消息将发送到不同队列，这将实现分区有序
+for (int i = 0; i < 10; i++) {
+    String msg = "Order update " + i;
+    rocketMQTemplate.syncSendOrderly("order-topic", msg, String.valueOf(i));
+    System.out.println("📦 Sent orderly: " + msg);
+}
+```
+
+#### 👂 消费者配置为顺序消费
+
+```java
+@Component
+@RocketMQMessageListener(
+    topic = "order-topic",
+    consumerGroup = "order-orderly-group",
+    consumeMode = ConsumeMode.ORDERLY // 指定consumeMode
+)
+public class OrderlyConsumer implements RocketMQListener<String> {
+    @Override
+    public void onMessage(String msg) {
+        System.out.println("🔢 Ordered message: " + msg);
+    }
+}
+```
+
+## 🧼 注意事项 & 小贴士
+
+- ✅ **顺序消息性能较低**，仅在强依赖顺序的业务中使用。
+- 📈 **分区有序优于全局有序**，兼顾顺序性和并发性。
+- 🚫 **Oneway 消息不可靠**，适合容忍丢消息的场景。
+- 🧪 **事务消息**需要配合本地事务状态检查，确保一致性。
+- 📊 **监控死信队列**，及时处理消费失败的消息。
+
+## 📚 总结
+
+RocketMQ 是一款强大的分布式消息中间件，广泛应用于企业级系统中。本文介绍了其基本概念、核心功能、Spring Boot 集成方式。通过本文的学习，你应该能够快速掌握 RocketMQ 的基本用法，并能够在实际项目中灵活运用。
