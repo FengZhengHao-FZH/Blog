@@ -45,7 +45,7 @@ ElasticSearch天生支持分布式部署，可以轻松扩展到数百台服务�
 实际应用场景里，用户并不知道每一个商品的id，只知道商品名称，所以对于用户的查询方式，是对商品名称做模糊查询，只能是逐行扫描数据。
 
 ```sql
-select id, title, price from tb_product where prodct_name like %手机%
+select id, product_name, price from tb_product where product_name like '%手机%';
 ```
 
 #### 倒排索引
@@ -55,7 +55,7 @@ select id, title, price from tb_product where prodct_name like %手机%
 倒排索引中有两个非常重要的概念
 
 - 文档(Document)：用来搜索的数据，其中的每一条数据就是一个文档。
-- 词条(Term)：对文档数据或用户搜索数据，利用某种算法分词，得到的具备含义的词语就是词条。例如：我最喜欢的FPS游戏是Csgo，就可以分为我、我最喜欢、FPS游戏、最喜欢的FPS、Apex这样的几个词条
+- 词条(Term)：对文档数据或用户搜索数据，利用某种算法分词，得到的具备含义的词语就是词条。例如：我最喜欢的FPS游戏是Csgo，就可以分为我、最喜欢、喜欢、FPS、游戏、FPS游戏、Csgo这样的几个词条。
 
 创建倒排索引是对正向索引的一种特殊处理，流程如下
 
@@ -65,12 +65,12 @@ select id, title, price from tb_product where prodct_name like %手机%
 
 由此，可以构建出一个倒排索引的表：
 
-|分词|文档id|
-|--|--|
-|小米|1,4|
-|华为|2,3|
-|耳机|3|
-|手环|4|
+| 分词 | 文档id |
+|----|------|
+| 小米 | 1,4  |
+| 华为 | 2,3  |
+| 耳机 | 3    |
+| 手环 | 4    |
 
 假如用户输入条件”华为手机“进行搜索，处理的流程将会如下：
 
@@ -78,7 +78,7 @@ select id, title, price from tb_product where prodct_name like %手机%
 2. 拿着词条在倒排索引中查找，可以得到包含词条的文档id为：2、3。
 3. 拿着文档id到正向索引中查找具体文档。
 
-虽然要先查询倒排索引，再查询正向索引，但是无论是词条还是文档id，都建立了索引，所以查询速度非常快，无需全表扫描，这也是EasticSearch搜索快的原因。
+虽然要先查询倒排索引，再查询正向索引，但是无论是词条还是文档id，都建立了索引，所以查询速度非常快，无需全表扫描，这也是ElasticSearch搜索快的原因。
 
 ## ElasticSearch的安装与启动
 
@@ -98,7 +98,7 @@ select id, title, price from tb_product where prodct_name like %手机%
 
    默认情况下，ElasticSearch会在`localhost:9200`上运行。
 
-   注意：在ElasticSearch 7.10 后默认开启了 x-pack 验证，具体配置项在ElasticSearch安装目录的config文件夹中的elasticsearch.yml文件中的`xpack.security.enabled: true`配置项。默认账号为elastic，首次启动会控制台会显示默认密码。
+   注意：在ElasticSearch 7.X 后默认开启了 x-pack 验证，具体配置项在ElasticSearch安装目录的config文件夹中的elasticsearch.yml文件中的`xpack.security.enabled: true`配置项。默认账号为elastic，首次启动会控制台会显示默认密码。
 
    如果默认密码无法找到，进入安装目录运行以下命令控制台会重新生成并显示默认密码：
    ```
@@ -336,11 +336,11 @@ GET /my_index/_search
       "name": "Elasticsearch"
     }
   },
-  "_source":["author","title"],// 只返回部分字段
+  "_source":["author","title"], // 只返回部分字段
   "sort": [
     {
       "liked": {
-        "order": "desc" /注意:在排序的过程中，只能使用数字日期
+        "order": "desc" // 注意:在排序的过程中，只能使用数字日期
       }
     }
   ],

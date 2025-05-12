@@ -1,0 +1,334 @@
+---
+title: 'MongoDB 基本用法详解'
+date: 2025-01-08T11:20:55Z
+tags: ['MongoDB']
+summary: 'MongoDB是一个流行的基于文档的 NoSQL 数据库，广泛应用于企业级系统中。本文介绍了其基本概念、核心功能、Spring Boot 集成方式。'
+layout: PostLayout
+bibliography: references-data.bib
+---
+
+## 什么是MongoDB
+
+### MongoDB简介
+
+MongoDB是一个流行的基于文档的 NoSQL 数据库，它使用类似 JSON 的文档模型存储数据，这使得数据存储变得非常灵活。它是介于关系数据库和非关系数据库之间的产品，是非关系数据库当中功能最丰富，最像关系数据库的。
+
+MongoDB 将数据存储为一个文档，数据结构由键值(key=>value)对组成，文档类似于 JSON 对象:
+
+```json
+{
+    "_id" : "170000000000001",
+    "name" : "Rose",
+    "age" : 18,
+    "createTime" : "2023-06-14 11:16:12",
+    "updateTime" : "2023-06-14 11:16:12",
+    "_class" : "com.example.test.user"
+}
+```
+
+### 核心概念
+
+| SQL 术语/概念 | MongoDB 术语/概念 | 解释/说明   |
+|-----------|---------------|---------|
+| database  | database      | 数据库     |
+| table     | collection    | 数据库表/集合 |
+| row       | document      | 数据行/文档  |
+| column    | field         | 字段/域    |
+
+
+### 关键特点
+
+- 高性能：优先存于内存，当内存不够时，只将热点数据放入内存，其他数据存在磁盘。
+- 文档导向的存储：面向文档，它以 JSON-like 的格式存储数据，使得数据结构更加灵活和丰富。
+- 强大的查询语言：使用 JSON 格式的查询语法，支持复杂的查询表达式。
+
+### MongoDB 与 Redis
+
+#### MongoDB 与 Redis 的相同点
+
+- **NoSQL 数据库**：两者都是 NoSQL 数据库，不依赖于传统的表结构和 SQL 查询语言。
+- **高性能**：都设计用于处理高并发读写操作，具有高效的性能表现。
+- **键值对存储**：尽管 Redis 更直接地作为键值对数据库，MongoDB 也支持基于文档的键值对存储方式。
+- **灵活的数据模型**：允许存储非结构化或半结构化的数据，适应快速变化的应用需求。
+
+#### MongoDB 与 Redis 的不同点
+
+- **数据存储类型**
+  - **MongoDB**：面向文档的数据库，使用 BSON（二进制 JSON）格式存储数据。适合复杂的数据结构和查询。
+  - **Redis**：键值对数据库，支持多种数据结构如字符串、哈希、列表、集合等。主要用于缓存和实时数据分析。
+- **持久化机制**
+  - **MongoDB**：默认情况下提供完整的持久化存储，数据会保存到磁盘上，确保数据的安全性和可靠性。
+  - **Redis**：虽然也支持持久化（RDB 和 AOF），但其主要用途是作为内存中的数据结构存储，速度更快，重启后可以恢复数据，但相比 MongoDB 持久化能力较弱。
+- **查询功能**
+  - **MongoDB**：支持复杂的查询操作，包括范围查询、全文搜索、聚合框架等，更适合需要复杂查询的应用场景。
+  - **Redis**：查询功能相对简单，主要用于简单的键值对查找和基于数据结构的操作，不适合复杂的查询需求。
+- **应用场景**
+  - **MongoDB**：适用于需要存储大量文档型数据的应用，如内容管理系统、日志分析系统等。
+  - **Redis**：常用于缓存、消息队列、计数器等场景，特别适合需要极高读写性能的应用。
+
+#### 最佳实践
+
+如果需要处理复杂的数据结构和查询，MongoDB 是更好的选择；如果追求极致的速度并且主要用于缓存或临时数据存储，则 Redis 更为合适。
+
+## MongoDB 的安装
+
+参考[MongoDB Windows环境下安装](https://www.runoob.com/mongodb/mongodb-window-install.html)
+
+## MongoDB的简单使用语法
+
+### 数据库相关
+
+- 展示所有数据库：`show dbs`
+- 创建数据库：`use DATE_BASE`-如果数据库不存在，则创建数据库，否则切换到指定数据库。
+- 删除数据库：`db.dropDatabase()`-删除当前正在使用的数据库。
+
+### 集合相关
+
+- 展示所有集合：`show collections`
+- 创建集合：`db.createCollection(name, options)`-具体的创建集合选项可参考[MongoDB创建集合参数](https://www.runoob.com/mongodb/mongodb-create-collection.html)
+- 删除集合：`db.collection.drop()`
+
+### 增删改相关
+
+假设我们有集合名叫users。
+
+使用 `insertOne` 和 `insertMany` 方法插入单个或多个文档：
+
+```
+db.users.insertOne({
+  name: "Bob"
+  age: 25,
+  email: "bob@example.com"
+})
+
+db.users.insertMany([
+  { name: "Charlie", age: 28, email: "charlie@example.com" },
+  { name: "David", age: 22, email: "david@example.com" }
+])
+```
+
+可以使用 `deleteOne` 和 `deleteMany` 方法删除单个或多个文档。
+
+```
+db.users.deleteOne({ name: "Alice" })
+db.users.deleteMany({ age : 18 })
+```
+
+使用 `updateOne` 和 `updateMany` 方法更新单个或多个文档。
+
+```
+db.myCollection.updateOne(
+    { name: "Alice" },
+    { $set: { age: 26 } }
+);
+db.users.updateMany(
+  { age: 30  },
+  { $set: { active: true } }
+)
+```
+
+## MongoDB强大的查询语法
+
+MongoDB 提供了丰富的查询语法，支持简单的条件查询、范围查询、正则表达式查询等。
+
+### 简单查询
+
+```
+db.users.find({ name: "Alice" })
+// select * from users where name = 'Alice'
+```
+
+### 条件查询
+
+#### 比较操作符
+| 符号   | 描述    | 示例                                |
+|------|-------|-----------------------------------|
+| $eq  | 等于    | `{ age: { $eq: 25 } }`            |
+| $ne  | 不等于   | `{ age: { $ne: 25 }}`             |
+| $gt  | 大于    | `{ age: { $gt: 25 } }`            |
+| $gte | 大于等于  | `{ age: { $gte: 25 } }`           |
+| $lt  | 小于    | `{ age: { $lt: 25 } }`            |
+| $lte | 小于等于  | `{ age: { $lte: 25 } }`           |
+| $in  | 在集合中  | `{ age: { $in: [25, 30, 35] } }`  |
+| $nin | 不在集合中 | `{ age: { $nin: [25, 30, 35] } }` |
+
+
+#### 逻辑操作
+
+| 操作符  | 描述        | 示例                                                                 |
+|------|-----------|--------------------------------------------------------------------|
+| $and | 逻辑与       | `{ "$and": [ { "age": { "$gt": 25 } }, { "city": "New York" } ] }` |
+| $or  | 逻辑或       | `{ $or: [ { age: { $lt: 25 } }, { city: "New York" } ] }`          |
+| $not | 逻辑非       | `{ age: { $not: { $gt: 25 } } }`                                   |
+| $nor | 逻辑或非，均不符合 | `{ $nor: [ { age: { $gt: 25 } }, { city: "New York" } ] }`         |
+
+#### 正则操作符
+
+| 操作符    | 描述      | 示例                           |
+|--------|---------|------------------------------|
+| $regex | 匹配正则表达式 | `{ name: { $regex: /^A/ } }` |
+
+复杂查询示例：
+
+```
+db.users.find({ age: { $gt: 25 } })  // 年龄大于25
+// select * from users where age < 25
+db.users.find(age: { $in: '[25, 30, 35]'  })
+// select * from users where age in (25,30,35)
+db.users.find({ $and: [{ age: { $gt: 25 } }, { age: { $lt: 35 } }] })
+// select * from users where age > 25 and age < 35
+db.users.find({ age: { $gt: 25 }, email: { $regex: ".*example.com$" } })
+```
+
+### 分页与排序
+
+```
+db.users.find().skip(10).limit(10)
+db.users.find().sort({ age: 1 }); // 1 表示升序，-1 表示降序。
+```
+
+### 索引
+
+索引可以显著提高查询性能。可以使用 `createIndex` 方法为集合创建索引。
+
+```
+db.users.createIndex({ name: 1 })  // 单索引
+db.users.createIndex({ name: 1, age: -1 })  //联合索引  name 升序，age 降序
+```
+
+## SpringBoot 集成 MongoDB
+
+添加Maven依赖
+
+```
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-mongodb</artifactId>
+</dependency>
+```
+
+yml配置
+
+```
+spring:
+  mongodb:
+    uri: mongodb://admin:123456@localhost:3717/test
+    connections-per-host: 30
+    min-connections-per-host: 10
+    threads-allowed-to-block-for-connection-multiplier: 4
+    write-concern: 1
+    write-timeout: 2000
+    write-fsync: true
+    #uri：指定MongoDB的连接字符串，包含用户名、密码、主机地址、端口和数据库名称。
+    #connections-per-host：每个主机的最大连接数为30。
+    #min-connections-per-host：每个主机的最小连接数为10。
+    #threads-allowed-to-block-for-connection-multiplier：允许阻塞等待连接的线程数乘数为4。
+    #write-concern：写操作的关注级别为1，表示至少有一个节点确认写操作。
+    #write-timeout：写操作超时时间为2000毫秒。
+    #write-fsync：是否强制同步到磁盘，设置为true。
+```
+
+Document定义
+
+```java
+import lombok.Data;
+import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.mapping.Document;
+
+@Data
+@Document(collection = "user")
+public class User {
+    /**
+     * 主键id
+     */
+    @Id
+    private Integer id;
+
+    /**
+     * 姓名
+     */
+    private String name;
+
+    /**
+     * 性别
+     */
+    private Integer sex;
+
+    /**
+     * 状态
+     */
+    private Integer status;
+}
+```
+
+Repository层
+
+```java
+import org.springframework.data.mongodb.repository.MongoRepository;
+import org.springframework.data.mongodb.repository.Query;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+
+@Repository
+public interface UserRepository extends MongoRepository<User, Integer> {
+
+    User findByName(String name);
+
+    // sex有0作为默认值
+    @Query(value = "{'sex':'?0','status':{$in:['1','2']}}")
+    List<User> findBySex(Integer sex);
+}
+```
+
+Controller层
+
+```java
+@RestController
+@RequestMapping("/mongo")
+public class MongoController {
+
+    @Resource
+    private UserRepository userRepository;
+
+    @GetMapping("/{id}")
+    public Result<User> getUserByIdMongo(@PathVariable Integer id){
+        return Result.success(userRepository.findById(id).get());
+    }
+
+    @GetMapping("/name")
+    public Result<User> getUserByNameMongo(@RequestParam String name){
+        return Result.success(userRepository.findByName(name));
+    }
+
+    @GetMapping("/sex")
+    public Result<List<User>> getUserBySexMongo(@RequestParam Integer sex){
+        return Result.success(userRepository.findBySex(sex));
+    }
+
+
+    @GetMapping("/list")
+    public Result<List<User>> listUserMongo(){
+        return Result.success(userRepository.findAll());
+    }
+
+    @PostMapping("/save")
+    public Result<Void> saveUserMongo(@RequestBody User user){
+        userRepository.save(user);
+        return Result.success();
+    }
+
+    @PutMapping("/update")
+    public Result<Void> updateUserMongo(@RequestBody User user){
+        userRepository.save(user);
+        return Result.success();
+    }
+
+    @DeleteMapping("/{id}")
+    public Result<Void> deleteUserMongo(@PathVariable Integer id){
+        userRepository.deleteById(id);
+        return Result.success();
+    }
+
+}
+```
